@@ -39,7 +39,7 @@ void step1(){
 }
 
 void step2(){
-  PH.receive_cmd(ph_receive_buffer,32);
+  enum Ezo_board::errors myerr = PH.receive_cmd(ph_receive_buffer,32);
   RTD.receive_cmd(rtd_receive_buffer,32);
   DO.receive_cmd(do_receive_buffer,32);
 
