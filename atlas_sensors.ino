@@ -9,10 +9,12 @@ Ezo_board PH = Ezo_board(99, "PH"); //ph
 Ezo_board EC = Ezo_board(100, "EC"); //electrical conductivity
 Ezo_board RTD = Ezo_board(102, "RTD"); //temperature
 
-char do_receive_buffer[32]; 
 char ph_receive_buffer[32]; 
 char rtd_receive_buffer[32]; 
+char do_receive_buffer[32]; 
 char ec_receive_buffer[32];
+// prints <ph>;<temp>;<do>;<ec>
+
 
 void step1();
 void step2();
