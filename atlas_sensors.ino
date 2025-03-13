@@ -29,6 +29,13 @@ void step1();
 void step2();
 void step3();
 
+//Last number here is probably the delay (in ms) after step 3. Adjust this time to be appropriate amount for a 15min delay.
+//NOTE: This is a temporary solution, as it doesn't let the Arduino sleep. To allow for sleep (using Arduino Mega):
+//Revert the number here to a low value (eg 1000) and sleep within Step 3 for 15mins via the Arduino sleep module:
+//#include "ArduinoLowPower.h" // AND
+//LowPower.sleep(10000); //this value is incorrect, adjust to 15 mins
+//^^^^^include this in step 3
+//https://docs.arduino.cc/learn/electronics/low-power/
 Sequencer3 readSequence(&step1, 1000, &step2, 1000, &step3, 1000);
 
 void setup() {
