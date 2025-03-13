@@ -4,6 +4,8 @@
 #include <sequencer4.h>
 #include <Ezo_i2c_util.h>
 
+// #include "LowPower.h"
+
 Ezo_board DO = Ezo_board(97, "DO"); //dissolved oxygen
 Ezo_board PH = Ezo_board(99, "PH"); //ph
 Ezo_board EC = Ezo_board(100, "EC"); //electrical conductivity
@@ -15,6 +17,13 @@ char do_receive_buffer[32];
 char ec_receive_buffer[32];
 // prints <ph>;<temp>;<do>;<ec>
 
+
+char do_storage[4][32];
+char ph_storage[4][32];
+char rtd_storage[4][32];
+char ec_storage[4][32];
+
+int transmitCounter = 0;
 
 void step1();
 void step2();
@@ -54,14 +63,35 @@ void step2(){
 }
 
 void step3(){
-  Serial.print(ph_receive_buffer);
-  Serial.print(";");
-  Serial.print(rtd_receive_buffer);
-  Serial.print(";");
-  Serial.print(do_receive_buffer);
-  Serial.print(";");
   EC.receive_cmd(ec_receive_buffer,32);
-  Serial.print(ec_receive_buffer);
-  Serial.println();
+
+  strcpy(do_storage[transmitCounter], do_receive_buffer);
+  strcpy(ph_storage[transmitCounter], ph_receive_buffer);
+  strcpy(rtd_storage[transmitCounter], rtd_receive_buffer);
+  strcpy(ec_storage[transmitCounter], ec_receive_buffer);
+  
+  if (transmitCounter == 3) {
+    for (int i = 0; i < 4; i++) {
+      Serial.print(ph_storage[i]);
+      Serial.print(";");
+      Serial.print(rtd_storage[i]);
+      Serial.print(";");
+      Serial.print(do_storage[i]);
+      Serial.print(";");  
+      Serial.print(ec_storage[i]);
+      Serial.println();
+    }
+    // This indicates EOF, and Arduino should sleep after this. (EOF = "\n"
+    Serial.println();
+
+    transmitCounter = 0;
+    memset(do_storage, 0, sizeof(do_storage));
+    memset(ph_storage, 0, sizeof(ph_storage));
+    memset(rtd_storage, 0, sizeof(rtd_storage));
+    memset(ec_storage, 0, sizeof(ec_storage));
+  } else {
+    transmitCounter++;
+  }
+
 }
 
