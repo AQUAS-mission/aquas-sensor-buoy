@@ -1,52 +1,117 @@
-int CONTAINER_1_PIN = 7;
-int CONTAINER_2_PIN = 8;
-int CONTAINER_3_PIN = 9;
-int SENSOR_1_PIN = 10;
-int SENSOR_2_PIN = 11;
-int SENSOR_3_PIN = 12;
+// Pin definitions
+const int CONTAINER_PINS[3] = {7, 8, 9};
+const int SENSOR_PINS[3] = {10, 11, 12};
+const int PUMP_PIN = 5;               // PWM pin for pump speed
+const int OUTFLOW_SOLENOID_PIN = 6;   // Pin to control outflow solenoid
+const int SAMPLE_TRIGGER_PIN = 2;     // Digital pin used to trigger sampling
 
-struct containerStatus {
+// Container status struct
+struct ContainerStatus {
   int container_pin;
   int sensor_pin;
   bool is_filled;
-  bool is_open;
 };
 
-containerStatus[3] c;
+ContainerStatus containers[3];
+int currentSampleContainer = 0;  // Tracks which container to fill
 
 void setup() {
-  // put your setup code here, to run once:
-  c[0].container_pin = 7;
-  c[1].container_pin = 8;
-  c[2].container_pin = 9;
-  c[0].sensor_pin = 10;
-  c[1].sensor_pin = 11;
-  c[2].sensor_pin = 12;
-  pinMode(c[0].container_pin, OUTPUT);
-  pinMode(c[1].container_pin, OUTPUT);
-  pinMode(c[2].container_pin, OUTPUT);
-  pinMode(c[0].sensor_pin, INPUT);
-  pinMode(c[1].sensor_pin, INPUT);
-  pinMode(c[2].sensor_pin, INPUT);
-}
-
-//1 <= ContainerNr <= 3
-void fillContainer(int containerNr) {
+  Serial.begin(9600);
   
+  // Initialize container and sensor pins
+  for (int i = 0; i < 3; i++) {
+    containers[i].container_pin = CONTAINER_PINS[i];
+    containers[i].sensor_pin = SENSOR_PINS[i];
+    containers[i].is_filled = false;
+    pinMode(containers[i].container_pin, OUTPUT);
+    pinMode(containers[i].sensor_pin, INPUT);
+  }
+
+  // Initialize solenoid and pump pins
+  pinMode(PUMP_PIN, OUTPUT);
+  pinMode(OUTFLOW_SOLENOID_PIN, OUTPUT);
+  pinMode(SAMPLE_TRIGGER_PIN, INPUT);
+
+  digitalWrite(PUMP_PIN, LOW);
+  digitalWrite(OUTFLOW_SOLENOID_PIN, LOW);
+}
+
+// Sets pump speed via PWM (0-255)
+void setPumpSpeed(int value) {
+  value = constrain(value, 0, 255);
+  analogWrite(PUMP_PIN, value);
+}
+
+// Purge system: flush lines for specified duration (ms)
+void purge(unsigned long duration) {
+  // Close all sample solenoids
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(containers[i].container_pin, LOW);
+  }
+
+  // Open outflow solenoid
+  digitalWrite(OUTFLOW_SOLENOID_PIN, HIGH);
+  setPumpSpeed(200);
+
+  delay(duration);
+
+  // Stop pump and close outflow
+  setPumpSpeed(0);
+  digitalWrite(OUTFLOW_SOLENOID_PIN, LOW);
 }
 
 
-
-//Set the speed of the pump between 
-void setPumpSpeed(int value) {
-  if (value >= 0 && value <= 255) {
-    analogWrite(value);
+// GPT4 logic tested below
+// Sample into the current container (guardrails included)
+void sample() {
+  if (currentSampleContainer >= 3) {
+    Serial.println("All containers filled.");
+    return;
   }
+
+  ContainerStatus &csc = containers[currentSampleContainer];
+
+  // Check if already filled
+  if (digitalRead(csc.sensor_pin) == HIGH) {
+    Serial.print("Container "); Serial.print(currentSampleContainer + 1);
+    Serial.println(" is already filled.");
+    csc.is_filled = true;
+    currentSampleContainer++;
+    return;
+  }
+
+  // Begin sampling
+  digitalWrite(csc.container_pin, HIGH);  // Open solenoid
+  setPumpSpeed(200);
+
+  unsigned long startTime = millis();
+  unsigned long timeout = 10000;  // 10 seconds safety timeout
+
+  // Wait until the container is filled or timeout
+  while (digitalRead(csc.sensor_pin) == LOW) {
+    if (millis() - startTime > timeout) {
+      Serial.println("Sampling timeout: sensor did not trigger.");
+      break;
+    }
+  }
+
+  // Stop pump and close solenoid
+  setPumpSpeed(0);
+  digitalWrite(csc.container_pin, LOW);
+
+  // Mark container as filled and move to next
+  csc.is_filled = true;
+  currentSampleContainer++;
+
+  Serial.print("Sample collected in container ");
+  Serial.println(currentSampleContainer);
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-  setPumpSpeed(0);
-  delay(1000);
-  setPumpSpeed(200);
-}
+  // Sample when digital pin goes HIGH (rising edge logic could be added)
+  if (digitalRead(SAMPLE_TRIGGER_PIN) == HIGH) {
+    sample();
+    delay(1000); // Debounce delay
+  }
+
+} 
