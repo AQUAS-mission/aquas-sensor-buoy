@@ -4,6 +4,7 @@ const int SENSOR_PINS[3] = {10, 11, 12};
 const int PUMP_PIN = 5;               // PWM pin for pump speed
 const int OUTFLOW_SOLENOID_PIN = 6;   // Pin to control outflow solenoid
 const int SAMPLE_TRIGGER_PIN = 2;     // Digital pin used to trigger sampling
+const int WATER_SENSOR_PIN = 7;       // Pin for the water sensor FS-IR02B
 
 // Container status struct
 struct ContainerStatus {
@@ -31,6 +32,7 @@ void setup() {
   pinMode(PUMP_PIN, OUTPUT);
   pinMode(OUTFLOW_SOLENOID_PIN, OUTPUT);
   pinMode(SAMPLE_TRIGGER_PIN, INPUT);
+  pinMode(WATER_SENSOR_PIN, INPUT);
 
   digitalWrite(PUMP_PIN, LOW);
   digitalWrite(OUTFLOW_SOLENOID_PIN, LOW);
@@ -100,7 +102,9 @@ void sample() {
   digitalWrite(csc.container_pin, LOW);
 
   // Mark container as filled and move to next
-  csc.is_filled = true;
+  if(digitalRead(inPin) == 0){ //1 is no water, 0 is water detected
+    csc.is_filled = true;
+  }  
   currentSampleContainer++;
 
   Serial.print("Sample collected in container ");
