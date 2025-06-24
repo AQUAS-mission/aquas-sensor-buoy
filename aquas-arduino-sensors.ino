@@ -51,6 +51,8 @@ void step2();
 void step3();
 void sleeping();
 
+bool takenReadingThisWakeCycle = false;
+
 //Last number here is probably the delay (in ms) after step 3. Adjust this time to be appropriate amount for a 15min delay.
 //NOTE: This is a temporary solution, as it doesn't let the Arduino sleep. To allow for sleep (using Arduino Mega):
 //Revert the number here to a low value (eg 1000) and sleep within Step 3 for 15mins via the Arduino sleep module:
@@ -177,6 +179,7 @@ void step3(){
     Serial.print(ec_receive_buffer);
     Serial.println();
   }
+  takenReadingThisWakeCycle = true;
 }
 
 void sleeping(){
@@ -199,5 +202,6 @@ void sleeping(){
   } 
     Serial.println(rtc.dateFormat("H:i:s", dt));
     delay(100);
+    takenReadingThisWakeCycle = false;
 }
 
