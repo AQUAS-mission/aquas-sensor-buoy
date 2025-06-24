@@ -45,9 +45,11 @@ char ec_receive_buffer[32];
 void wakeup(){
 }
 
+// steps of sensor readings and sleeping
 void step1();
 void step2();
 void step3();
+void sleeping();
 
 //Last number here is probably the delay (in ms) after step 3. Adjust this time to be appropriate amount for a 15min delay.
 //NOTE: This is a temporary solution, as it doesn't let the Arduino sleep. To allow for sleep (using Arduino Mega):
@@ -56,7 +58,7 @@ void step3();
 //LowPower.sleep(10000); //this value is incorrect, adjust to 15 mins
 //^^^^^include this in step 3
 //https://docs.arduino.cc/learn/electronics/low-power/
-Sequencer3 readSequence(&step1, 1000, &step2, 1000, &step3, 1000);
+Sequencer4 readSequence(&step1, 1000, &step2, 1000, &step3, 1000, &sleeping, 1000);
 
 void initSD() {
   // Initialize SD card
@@ -104,7 +106,7 @@ void setup() {
 
   Wire.begin();
   Serial.begin(9600);
-  
+  Serial.println("In setup");
   // Initialize SD card
   initSD();
   
@@ -114,21 +116,6 @@ void setup() {
 
 void loop() {
   readSequence.run();
-
-  //sleeping, to be woken by interrupt pin
-  attachInterrupt(digitalPinToInterrupt(intPin), wakeup, LOW);
-  Serial.println("sleeping...");
-  delay(100);
-  sleep_cpu();
-
-  //waking
-  detachInterrupt(digitalPinToInterrupt(intPin));
-  rtc.clearAlarm1();
-  Serial.println("Awake!");
-  RTCDateTime dt = rtc.getDateTime();
-  Serial.println(rtc.dateFormat("H:i:s", dt));
-  delay(100);
-
 }
 
 void step1(){
@@ -190,5 +177,25 @@ void step3(){
     Serial.print(ec_receive_buffer);
     Serial.println();
   }
+}
+
+void sleeping(){
+  RTCDateTime dt = rtc.getDateTime();
+
+  while(dt.minute % 2 != 0){
+    //sleeping, to be woken by interrupt pin
+    attachInterrupt(digitalPinToInterrupt(intPin), wakeup, LOW);
+    Serial.println("sleeping...");
+    delay(100);
+    sleep_cpu();
+
+    //waking
+    detachInterrupt(digitalPinToInterrupt(intPin));
+    rtc.clearAlarm1();
+    Serial.println("Awake!");
+    dt = rtc.getDateTime();
+  } 
+    Serial.println(rtc.dateFormat("H:i:s", dt));
+    delay(100);
 }
 
