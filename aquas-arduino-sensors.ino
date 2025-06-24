@@ -58,6 +58,29 @@ void step3();
 //https://docs.arduino.cc/learn/electronics/low-power/
 Sequencer3 readSequence(&step1, 1000, &step2, 1000, &step3, 1000);
 
+void initSD() {
+  // Initialize SD card
+  Serial.print("Initializing SD card...");
+  if (!SD.begin(chipSelect)) {
+    Serial.println("Card failed, or not present");
+    // Don't do anything more:
+    while (1);
+  }
+  Serial.println("card initialized.");
+  
+  // Create CSV file with headers if it doesn't exist
+  if (!SD.exists("sensor_data.csv")) {
+    File dataFile = SD.open("sensor_data.csv", FILE_WRITE);
+    if (dataFile) {
+      dataFile.println("timestamp,ph,temperature,dissolved_oxygen,electrical_conductivity");
+      dataFile.close();
+      Serial.println("Created new CSV file with headers");
+    } else {
+      Serial.println("Error creating CSV file");
+    }
+  }
+}
+
 void setup() {
   //set up real time clock (RTC) DS3231
   rtc.begin();
@@ -83,25 +106,7 @@ void setup() {
   Serial.begin(9600);
   
   // Initialize SD card
-  Serial.print("Initializing SD card...");
-  if (!SD.begin(chipSelect)) {
-    Serial.println("Card failed, or not present");
-    // Don't do anything more:
-    while (1);
-  }
-  Serial.println("card initialized.");
-  
-  // Create CSV file with headers if it doesn't exist
-  if (!SD.exists("sensor_data.csv")) {
-    File dataFile = SD.open("sensor_data.csv", FILE_WRITE);
-    if (dataFile) {
-      dataFile.println("timestamp,ph,temperature,dissolved_oxygen,electrical_conductivity");
-      dataFile.close();
-      Serial.println("Created new CSV file with headers");
-    } else {
-      Serial.println("Error creating CSV file");
-    }
-  }
+  initSD();
   
   readSequence.reset();
   Serial.println("System ready - data will be saved to sensor_data.csv");
