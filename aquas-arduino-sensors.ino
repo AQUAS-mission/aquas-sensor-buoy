@@ -71,8 +71,8 @@ void initSD() {
   Serial.println("card initialized.");
   
   // Create CSV file with headers if it doesn't exist
-  if (!SD.exists("sensor_data.csv")) {
-    File dataFile = SD.open("sensor_data.csv", FILE_WRITE);
+  if (!SD.exists("sensorData.csv")) {
+    File dataFile = SD.open("sensorData.csv", FILE_WRITE);
     if (dataFile) {
       dataFile.println("timestamp,ph,temperature,dissolved_oxygen,electrical_conductivity");
       dataFile.close();
@@ -111,7 +111,7 @@ void setup() {
   initSD();
   
   readSequence.reset();
-  Serial.println("System ready - data will be saved to sensor_data.csv");
+  Serial.println("System ready - data will be saved to sensorData.csv");
 }
 
 void loop() {
@@ -142,7 +142,7 @@ void step3(){
   EC.receive_cmd(ec_receive_buffer,32);
 
   // Now we have all 4 sensor readings - write immediately to SD card
-  File dataFile = SD.open("sensor_data.csv", FILE_WRITE);
+  File dataFile = SD.open("sensorData.csv", FILE_WRITE);
   
   if (dataFile) {
     // Get current timestamp
@@ -165,7 +165,7 @@ void step3(){
     dataFile.close();
     Serial.println("Data saved to SD card");
   } else {
-    Serial.println("Error opening sensor_data.csv for writing");
+    Serial.println("Error opening sensorData.csv for writing");
     // Fallback to Serial output if SD card fails
     Serial.println("Fallback - printing to Serial:");
     Serial.print(ph_receive_buffer);
