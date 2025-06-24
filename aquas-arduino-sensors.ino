@@ -56,7 +56,8 @@ void wakeup(){
 void step1();
 void step2();
 void step3();
-void sleeping();
+void sleepStep();
+void goToSleep();
 
 bool takenReadingThisWakeCycle = false;
 
@@ -67,7 +68,7 @@ bool takenReadingThisWakeCycle = false;
 //LowPower.sleep(10000); //this value is incorrect, adjust to 15 mins
 //^^^^^include this in step 3
 //https://docs.arduino.cc/learn/electronics/low-power/
-Sequencer4 readSequence(&step1, 1000, &step2, 1000, &step3, 1000, &sleeping, 1000);
+Sequencer4 readSequence(&step1, 1000, &step2, 1000, &step3, 1000, &sleepStep, 1000);
 
 // Function to read turbidity from the sensor, based on temperature compensation and conversion from voltage to NTU
 float readTurbidity(float temperature) {
@@ -233,12 +234,7 @@ void step3(){
   takenReadingThisWakeCycle = true;
 }
 
-void sleeping(){
-  RTCDateTime dt = rtc.getDateTime();
-    Serial.println(dt.minute);
-    Serial.println(dt.minute % 2 != 0);
-  while(dt.minute % 2 != 0){
-
+void goToSleep(){
     //sleeping, to be woken by interrupt pin
     attachInterrupt(digitalPinToInterrupt(intPin), wakeup, LOW);
     Serial.println("sleeping...");
@@ -249,8 +245,21 @@ void sleeping(){
     detachInterrupt(digitalPinToInterrupt(intPin));
     rtc.clearAlarm1();
     Serial.println("Awake!");
+}
+
+void sleepStep(){
+  RTCDateTime dt = rtc.getDateTime();
+  Serial.println(dt.minute);
+  Serial.println(dt.minute % 2 != 0);
+  while(dt.minute % 2 != 0){
+    goToSleep();
     dt = rtc.getDateTime();
-  } 
+  }
+  if(takenReadingThisWakeCycle = true) {
+    Serial.println("Already taken a reading");
+    goToSleep(); //taking another reading this minute is redundant
+    dt = rtc.getDateTime();
+  }
     Serial.println(rtc.dateFormat("H:i:s", dt));
     delay(100);
     takenReadingThisWakeCycle = false;
