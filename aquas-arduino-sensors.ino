@@ -87,7 +87,7 @@ void setup() {
   //set up real time clock (RTC) DS3231
   rtc.begin();
   rtc.setDateTime(__DATE__, __TIME__);
-  rtc.setAlarm1(0, 3, 0, 0, DS3231_MATCH_H_M_S); //sets alarm for every 3 hours
+  rtc.setAlarm1(0, 0, 0, 0, DS3231_MATCH_S); //sets alarm for every minute
   rtc.enableOutput(false);
 
   //set time if it hasn;t been set yet
@@ -181,8 +181,10 @@ void step3(){
 
 void sleeping(){
   RTCDateTime dt = rtc.getDateTime();
-
+    Serial.println(dt.minute);
+    Serial.println(dt.minute % 2 != 0);
   while(dt.minute % 2 != 0){
+
     //sleeping, to be woken by interrupt pin
     attachInterrupt(digitalPinToInterrupt(intPin), wakeup, LOW);
     Serial.println("sleeping...");
