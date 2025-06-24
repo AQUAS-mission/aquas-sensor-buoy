@@ -4,36 +4,41 @@
 #include <sequencer3.h>
 #include <sequencer4.h>
 #include <Ezo_i2c_util.h>
-#include "RTClib.h"
 #include "avr/sleep.h"
+#include <SD.h>
+#include <SPI.h>
 
 // #include "LowPower.h"
 
 // interrupt pin used for waking the arduino
 const int intPin = 2;
 
+// Pins for SD Card module
+const int chipSelect = 53; // Use pin 10 for Uno/Nano, change to 53 for Mega
+ 
 
 //RTC 
 DS3231 rtc;
 
+// ****************************************
+// EZO interlink sensor configuraiton
 Ezo_board DO = Ezo_board(97, "DO"); //dissolved oxygen
 Ezo_board PH = Ezo_board(99, "PH"); //ph
 Ezo_board EC = Ezo_board(100, "EC"); //electrical conductivity
 Ezo_board RTD = Ezo_board(102, "RTD"); //temperature
+// ****************************************
 
+
+// ****************************************
+// SENSOR MEMORY MANAGEMENT
+
+// Single buffers to hold the current sensor readings
 char ph_receive_buffer[32]; 
 char rtd_receive_buffer[32]; 
 char do_receive_buffer[32]; 
 char ec_receive_buffer[32];
-// prints <ph>;<temp>;<do>;<ec>
 
-
-char do_storage[4][32];
-char ph_storage[4][32];
-char rtd_storage[4][32];
-char ec_storage[4][32];
-
-int transmitCounter = 0;
+// ****************************************
 
 // callback called upon the arduino waking
 // can be empty, but not null
@@ -76,8 +81,30 @@ void setup() {
 
   Wire.begin();
   Serial.begin(9600);
+  
+  // Initialize SD card
+  Serial.print("Initializing SD card...");
+  if (!SD.begin(chipSelect)) {
+    Serial.println("Card failed, or not present");
+    // Don't do anything more:
+    while (1);
+  }
+  Serial.println("card initialized.");
+  
+  // Create CSV file with headers if it doesn't exist
+  if (!SD.exists("sensor_data.csv")) {
+    File dataFile = SD.open("sensor_data.csv", FILE_WRITE);
+    if (dataFile) {
+      dataFile.println("timestamp,ph,temperature,dissolved_oxygen,electrical_conductivity");
+      dataFile.close();
+      Serial.println("Created new CSV file with headers");
+    } else {
+      Serial.println("Error creating CSV file");
+    }
+  }
+  
   readSequence.reset();
-  Serial.println("ph;temp;do;ec");
+  Serial.println("System ready - data will be saved to sensor_data.csv");
 }
 
 void loop() {
@@ -122,33 +149,41 @@ void step2(){
 void step3(){
   EC.receive_cmd(ec_receive_buffer,32);
 
-  strcpy(do_storage[transmitCounter], do_receive_buffer);
-  strcpy(ph_storage[transmitCounter], ph_receive_buffer);
-  strcpy(rtd_storage[transmitCounter], rtd_receive_buffer);
-  strcpy(ec_storage[transmitCounter], ec_receive_buffer);
+  // Now we have all 4 sensor readings - write immediately to SD card
+  File dataFile = SD.open("sensor_data.csv", FILE_WRITE);
   
-  if (transmitCounter == 3) {
-    for (int i = 0; i < 4; i++) {
-      Serial.print(ph_storage[i]);
-      Serial.print(";");
-      Serial.print(rtd_storage[i]);
-      Serial.print(";");
-      Serial.print(do_storage[i]);
-      Serial.print(";");  
-      Serial.print(ec_storage[i]);
-      Serial.println();
-    // This indicates EOF, and Arduino should sleep after this. (EOF = "\n"
-    Serial.println();
-
-    transmitCounter = 0;
-    memset(do_storage, 0, sizeof(do_storage));
-    memset(ph_storage, 0, sizeof(ph_storage));
-    memset(rtd_storage, 0, sizeof(rtd_storage));
-    memset(ec_storage, 0, sizeof(ec_storage));
-    }
+  if (dataFile) {
+    // Get current timestamp
+    RTCDateTime dt = rtc.getDateTime();
+    
+    // Write timestamp
+    dataFile.print(rtc.dateFormat("Y-m-d H:i:s", dt));
+    dataFile.print(",");
+    
+    // Write sensor data
+    dataFile.print(ph_receive_buffer);
+    dataFile.print(",");
+    dataFile.print(rtd_receive_buffer);
+    dataFile.print(",");
+    dataFile.print(do_receive_buffer);
+    dataFile.print(",");
+    dataFile.print(ec_receive_buffer);
+    dataFile.println();
+    
+    dataFile.close();
+    Serial.println("Data saved to SD card");
   } else {
-    transmitCounter++;
+    Serial.println("Error opening sensor_data.csv for writing");
+    // Fallback to Serial output if SD card fails
+    Serial.println("Fallback - printing to Serial:");
+    Serial.print(ph_receive_buffer);
+    Serial.print(";");
+    Serial.print(rtd_receive_buffer);
+    Serial.print(";");
+    Serial.print(do_receive_buffer);
+    Serial.print(";");  
+    Serial.print(ec_receive_buffer);
+    Serial.println();
   }
-
 }
 
