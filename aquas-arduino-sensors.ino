@@ -3,8 +3,11 @@
 #include <sequencer3.h>
 #include <sequencer4.h>
 #include <Ezo_i2c_util.h>
+#include "RTClib.h"
 
 // #include "LowPower.h"
+
+RTC_DS3231 rtc;
 
 Ezo_board DO = Ezo_board(97, "DO"); //dissolved oxygen
 Ezo_board PH = Ezo_board(99, "PH"); //ph
@@ -39,6 +42,23 @@ void step3();
 Sequencer3 readSequence(&step1, 1000, &step2, 1000, &step3, 1000);
 
 void setup() {
+  //set up real time clock (RTC) DS3231
+  //check if RTC is connected
+  if (! rtc.begin()) {
+    Serial.println("Couldn't find RTC");
+    Serial.flush();
+    while (1) delay(10);
+  }
+
+  //set time if it hasn;t been set yet
+  // will set to the time which the sketch was compiled
+  if (! rtc.isrunning()) {
+    Serial.println("RTC is NOT running, let's set the time!");
+    // When time needs to be set on a new device, or after a power loss, the
+    // following line sets the RTC to the date & time this sketch was compiled
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  }
+
   Wire.begin();
   Serial.begin(9600);
   readSequence.reset();
@@ -87,6 +107,8 @@ void step3(){
       Serial.print(";");  
       Serial.print(ec_storage[i]);
       Serial.println();
+      //Print Full Timestamp
+      Serial.println(String("DateTime::TIMESTAMP_FULL:\t")+time.timestamp(DateTime::TIMESTAMP_FULL));
     }
     // This indicates EOF, and Arduino should sleep after this. (EOF = "\n"
     Serial.println();
