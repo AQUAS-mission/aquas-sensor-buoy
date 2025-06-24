@@ -1,13 +1,20 @@
+#include <DS3231.h>
 #include <Ezo_i2c.h>
 #include <Wire.h>
 #include <sequencer3.h>
 #include <sequencer4.h>
 #include <Ezo_i2c_util.h>
 #include "RTClib.h"
+#include "avr/sleep.h"
 
 // #include "LowPower.h"
 
-RTC_DS3231 rtc;
+// interrupt pin used for waking the arduino
+const int intPin = 2;
+
+
+//RTC 
+DS3231 rtc;
 
 Ezo_board DO = Ezo_board(97, "DO"); //dissolved oxygen
 Ezo_board PH = Ezo_board(99, "PH"); //ph
@@ -28,6 +35,11 @@ char ec_storage[4][32];
 
 int transmitCounter = 0;
 
+// callback called upon the arduino waking
+// can be empty, but not null
+void wakeup(){
+}
+
 void step1();
 void step2();
 void step3();
@@ -43,21 +55,24 @@ Sequencer3 readSequence(&step1, 1000, &step2, 1000, &step3, 1000);
 
 void setup() {
   //set up real time clock (RTC) DS3231
-  //check if RTC is connected
-  if (! rtc.begin()) {
-    Serial.println("Couldn't find RTC");
-    Serial.flush();
-    while (1) delay(10);
-  }
+  rtc.begin();
+  rtc.setDateTime(__DATE__, __TIME__);
+  rtc.setAlarm1(0, 3, 0, 0, DS3231_MATCH_H_M_S); //sets alarm for every 3 hours
+  rtc.enableOutput(false);
 
   //set time if it hasn;t been set yet
   // will set to the time which the sketch was compiled
-  if (! rtc.isrunning()) {
-    Serial.println("RTC is NOT running, let's set the time!");
-    // When time needs to be set on a new device, or after a power loss, the
-    // following line sets the RTC to the date & time this sketch was compiled
-    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-  }
+  // if (! rtc.isrunning()) {
+  //   Serial.println("RTC is NOT running, let's set the time!");
+  //   // When time needs to be set on a new device, or after a power loss, the
+  //   // following line sets the RTC to the date & time this sketch was compiled
+  //   rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  // }
+
+  //set arduino sleep method
+  pinMode(intPin, INPUT);
+  set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+  sleep_enable();
 
   Wire.begin();
   Serial.begin(9600);
@@ -67,6 +82,21 @@ void setup() {
 
 void loop() {
   readSequence.run();
+
+  //sleeping, to be woken by interrupt pin
+  attachInterrupt(digitalPinToInterrupt(intPin), wakeup, LOW);
+  Serial.println("sleeping...");
+  delay(100);
+  sleep_cpu();
+
+  //waking
+  detachInterrupt(digitalPinToInterrupt(intPin));
+  rtc.clearAlarm1();
+  Serial.println("Awake!");
+  RTCDateTime dt = rtc.getDateTime();
+  Serial.println(rtc.dateFormat("H:i:s", dt));
+  delay(100);
+
 }
 
 void step1(){
@@ -107,9 +137,6 @@ void step3(){
       Serial.print(";");  
       Serial.print(ec_storage[i]);
       Serial.println();
-      //Print Full Timestamp
-      Serial.println(String("DateTime::TIMESTAMP_FULL:\t")+time.timestamp(DateTime::TIMESTAMP_FULL));
-    }
     // This indicates EOF, and Arduino should sleep after this. (EOF = "\n"
     Serial.println();
 
@@ -118,6 +145,7 @@ void step3(){
     memset(ph_storage, 0, sizeof(ph_storage));
     memset(rtd_storage, 0, sizeof(rtd_storage));
     memset(ec_storage, 0, sizeof(ec_storage));
+    }
   } else {
     transmitCounter++;
   }
