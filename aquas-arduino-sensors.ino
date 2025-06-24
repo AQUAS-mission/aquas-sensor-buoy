@@ -15,7 +15,11 @@ const int intPin = 2;
 
 // Pins for SD Card module
 const int chipSelect = 53; // Use pin 10 for Uno/Nano, change to 53 for Mega
+
+// Turbidity sensor pin
+const int turbidityPin = A1; // Analog pin for turbidity sensor
  
+String filename = "sensor.csv";
 
 //RTC 
 DS3231 rtc;
@@ -37,6 +41,9 @@ char ph_receive_buffer[32];
 char rtd_receive_buffer[32]; 
 char do_receive_buffer[32]; 
 char ec_receive_buffer[32];
+
+// Turbidity reading variable
+float turbidityNTU = 0.0;
 
 // ****************************************
 
@@ -62,6 +69,30 @@ bool takenReadingThisWakeCycle = false;
 //https://docs.arduino.cc/learn/electronics/low-power/
 Sequencer4 readSequence(&step1, 1000, &step2, 1000, &step3, 1000, &sleeping, 1000);
 
+// Function to read turbidity from the sensor, based on temperature compensation and conversion from voltage to NTU
+float readTurbidity(float temperature) {
+  // Read analog value from turbidity sensor
+  int sensorValue = analogRead(turbidityPin);
+  
+  // Convert to voltage (assuming 5V Arduino)
+  float voltage = sensorValue * (5.0 / 1024.0);
+  
+  // Convert voltage to NTU using quadratic formula for 5V operation
+  // Based on DFRobot SEN0189 calibration: y = -1120.4x² + 5742.3x - 4352.9
+  float ntu = -1120.4 * voltage * voltage + 5742.3 * voltage - 4352.9;
+  
+  // Apply temperature compensation: turbidity readings typically increase by ~2% per °C above 20°C
+  float tempCompensation = 1.0 + 0.02 * (temperature - 20.0);
+  ntu = ntu / tempCompensation;
+
+  // Ensure NTU is not negative
+  if (ntu < 0) {
+    ntu = 0;
+  }
+  
+  return ntu;
+}
+
 void initSD() {
   // Initialize SD card
   Serial.print("Initializing SD card...");
@@ -72,16 +103,22 @@ void initSD() {
   }
   Serial.println("card initialized.");
   
+  delay(100);
+  
   // Create CSV file with headers if it doesn't exist
-  if (!SD.exists("sensorData.csv")) {
-    File dataFile = SD.open("sensorData.csv", FILE_WRITE);
+  if (!SD.exists(filename)) {
+    Serial.println("File doesn't exist, creating new file...");
+    File dataFile = SD.open(filename, FILE_WRITE);
     if (dataFile) {
-      dataFile.println("timestamp,ph,temperature,dissolved_oxygen,electrical_conductivity");
+      Serial.println("File opened successfully, writing headers...");
+      dataFile.println("timestamp,ph,temperature,dissolved_oxygen,electrical_conductivity,turbidity_ntu");
       dataFile.close();
       Serial.println("Created new CSV file with headers");
     } else {
       Serial.println("Error creating CSV file");
     }
+  } else {
+    Serial.println("CSV file already exists");
   }
 }
 
@@ -106,6 +143,9 @@ void setup() {
   set_sleep_mode(SLEEP_MODE_PWR_DOWN);
   sleep_enable();
 
+  // Initialize turbidity sensor pin
+  pinMode(turbidityPin, INPUT);
+
   Wire.begin();
   Serial.begin(9600);
   Serial.println("In setup");
@@ -113,7 +153,7 @@ void setup() {
   initSD();
   
   readSequence.reset();
-  Serial.println("System ready - data will be saved to sensorData.csv");
+  Serial.println("System ready - data will be saved to " + filename);
 }
 
 void loop() {
@@ -143,8 +183,15 @@ void step2(){
 void step3(){
   EC.receive_cmd(ec_receive_buffer,32);
 
-  // Now we have all 4 sensor readings - write immediately to SD card
-  File dataFile = SD.open("sensorData.csv", FILE_WRITE);
+  // Read turbidity with temperature compensation
+  float temperature = RTD.get_last_received_reading();
+  if (temperature <= -1000.0) {
+    temperature = 25.0; // Default temperature if RTD reading failed
+  }
+  turbidityNTU = readTurbidity(temperature);
+
+  // Now we have all sensor readings - write immediately to SD card
+  File dataFile = SD.open(filename, FILE_WRITE);
   
   if (dataFile) {
     // Get current timestamp
@@ -162,12 +209,14 @@ void step3(){
     dataFile.print(do_receive_buffer);
     dataFile.print(",");
     dataFile.print(ec_receive_buffer);
+    dataFile.print(",");
+    dataFile.print(turbidityNTU, 2); // Print with 2 decimal places
     dataFile.println();
     
     dataFile.close();
     Serial.println("Data saved to SD card");
   } else {
-    Serial.println("Error opening sensorData.csv for writing");
+    Serial.println("Error opening " + filename + " for writing");
     // Fallback to Serial output if SD card fails
     Serial.println("Fallback - printing to Serial:");
     Serial.print(ph_receive_buffer);
@@ -177,6 +226,8 @@ void step3(){
     Serial.print(do_receive_buffer);
     Serial.print(";");  
     Serial.print(ec_receive_buffer);
+    Serial.print(";");
+    Serial.print(turbidityNTU, 2);
     Serial.println();
   }
   takenReadingThisWakeCycle = true;
