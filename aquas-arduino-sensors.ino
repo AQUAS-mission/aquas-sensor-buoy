@@ -14,6 +14,9 @@
 // interrupt pin used for waking the arduino
 const int intPin = 2;
 
+// Interlink isolated channel diable pin. HIGH = disable
+const int interlinkDisablePin = 3;
+
 // Pins for SD Card module
 const int chipSelect = 53; // Use pin 10 for Uno/Nano, change to 53 for Mega
 
@@ -142,6 +145,7 @@ void setup() {
 
   //set arduino sleep method
   pinMode(intPin, INPUT);
+  pinMode(interlinkDisablePin, OUTPUT);
   set_sleep_mode(SLEEP_MODE_PWR_DOWN);
   sleep_enable();
 
@@ -163,6 +167,9 @@ void loop() {
 }
 
 void step1(){
+  // Wake sensors and delay for time until stable reading
+  wakeSensors();
+
   // send a read command
   DO.send_read_cmd();
   PH.send_read_cmd();
@@ -237,13 +244,12 @@ void step3(){
 
 void goToSleep(){
     Serial.println("Preparing for sleep...");
+    sleepSensors(); // Sleep all our sensors
+    digitalWrite(interlinkDisablePin, HIGH); // Disable Interlink channels
     Serial.flush(); // Ensure all serial data is sent before clock change
     
     // Lower clock speed to save power (16MHz -> 2MHz)
     clock_prescale_set(clock_div_8); // Divide by 8
-
-    // Sleep all our sensors:
-    sleepSensors();
     
     //sleeping, to be woken by interrupt pin
     attachInterrupt(digitalPinToInterrupt(intPin), wakeup, LOW);
@@ -256,18 +262,33 @@ void goToSleep(){
     
     // Restore full clock speed after waking
     clock_prescale_set(clock_div_1); // No division (full 16MHz)
-    
+
+    digitalWrite(interlinkDisablePin, LOW); // Re-enable Interlink channels
+
     Serial.println("Awake! Clock speed restored.");
 }
 
 // Sleep all sensors indefinitely until any other command is issued. 
 void sleepSensors() {
-  String sleepCommand = "Sleep";
+  char* sleepCommand = "Sleep";
   DO.send_cmd(sleepCommand);
   PH.send_cmd(sleepCommand);
   EC.send_cmd(sleepCommand);
   RTD.send_cmd(sleepCommand);
+  Serial.println("ALL sensors sleeping...");
 }
+
+// Send an arbitrary command to wake all sensors + delay 
+void wakeSensors() {
+  char* wakeCommand = "Status";
+  DO.send_cmd(wakeCommand);
+  PH.send_cmd(wakeCommand);
+  EC.send_cmd(wakeCommand);
+  RTD.send_cmd(wakeCommand);
+  Serial.println("All sensors waking, delaying for 20s...");
+  delay(20000);
+}
+
 
 void sleepStep(){
   RTCDateTime dt = rtc.getDateTime();
