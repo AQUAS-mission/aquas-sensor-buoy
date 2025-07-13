@@ -4,7 +4,8 @@
 #include <sequencer3.h>
 #include <sequencer4.h>
 #include <Ezo_i2c_util.h>
-#include "avr/sleep.h"
+#include <avr/sleep.h>
+#include <avr/power.h>
 #include <SD.h>
 #include <SPI.h>
 
@@ -235,16 +236,25 @@ void step3(){
 }
 
 void goToSleep(){
+    Serial.println("Preparing for sleep...");
+    Serial.flush(); // Ensure all serial data is sent before clock change
+    
+    // Lower clock speed to save power (16MHz -> 2MHz)
+    clock_prescale_set(clock_div_8); // Divide by 8
+    
     //sleeping, to be woken by interrupt pin
     attachInterrupt(digitalPinToInterrupt(intPin), wakeup, LOW);
-    Serial.println("sleeping...");
-    delay(100);
+    delay(50); // Shorter delay due to slower clock
     sleep_cpu();
 
     //waking
     detachInterrupt(digitalPinToInterrupt(intPin));
     rtc.clearAlarm1();
-    Serial.println("Awake!");
+    
+    // Restore full clock speed after waking
+    clock_prescale_set(clock_div_1); // No division (full 16MHz)
+    
+    Serial.println("Awake! Clock speed restored.");
 }
 
 void sleepStep(){
