@@ -241,6 +241,9 @@ void goToSleep(){
     
     // Lower clock speed to save power (16MHz -> 2MHz)
     clock_prescale_set(clock_div_8); // Divide by 8
+
+    // Sleep all our sensors:
+    sleepSensors();
     
     //sleeping, to be woken by interrupt pin
     attachInterrupt(digitalPinToInterrupt(intPin), wakeup, LOW);
@@ -255,6 +258,15 @@ void goToSleep(){
     clock_prescale_set(clock_div_1); // No division (full 16MHz)
     
     Serial.println("Awake! Clock speed restored.");
+}
+
+// Sleep all sensors indefinitely until any other command is issued. 
+void sleepSensors() {
+  String sleepCommand = "Sleep";
+  DO.send_cmd(sleepCommand);
+  PH.send_cmd(sleepCommand);
+  EC.send_cmd(sleepCommand);
+  RTD.send_cmd(sleepCommand);
 }
 
 void sleepStep(){
