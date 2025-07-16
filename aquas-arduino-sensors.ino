@@ -134,7 +134,7 @@ void setup() {
   //set up real time clock (RTC) DS3231
   rtc.begin();
   rtc.setDateTime(__DATE__, __TIME__);
-  rtc.setAlarm1(0, 0, 0, 0, DS3231_MATCH_M_S); //sets alarm for every hour
+  rtc.setAlarm1(0, 0, 0, 0, DS3231_MATCH_M_S); //sets alarm for every minute
   rtc.enableOutput(false);
 
   //set time if it hasn;t been set yet
@@ -306,18 +306,19 @@ void wakeInterlinkChannels() {
 
 void sleepStep() {
   RTCDateTime dt = rtc.getDateTime();
-  Serial.println(dt.hour);
-  Serial.println(dt.hour % 2 != 0);
-  while(dt.hour % 2 != 0){
-    goToSleep();
-    dt = rtc.getDateTime();
-  }
-  if (takenReadingThisWakeCycle = true) {
-    Serial.println("Already taken a reading");
-    goToSleep();  //taking another reading this minute is redundant
-    dt = rtc.getDateTime();
-  }
+  // Serial.println(dt.hour);
+  // Serial.println(dt.hour % 2 != 0);
+  // while(dt.hour % 2 != 0){
+  //   goToSleep();
+  //   dt = rtc.getDateTime();
+  // }
+  // if (takenReadingThisWakeCycle = true) {
+  //   Serial.println("Already taken a reading");
+  //   goToSleep();  //taking another reading this minute is redundant
+  //   dt = rtc.getDateTime();
+  // }
   Serial.println(rtc.dateFormat("H:i:s", dt));
+  goToSleep();
   delay(100);
   takenReadingThisWakeCycle = false;
 }
