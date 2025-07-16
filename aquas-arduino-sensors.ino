@@ -15,25 +15,27 @@
 const int intPin = 2;
 
 // Interlink isolated channel diable pin. HIGH = disable
-const int interlinkDisablePin = 3;
+const int interlinkIsolatedDisablePin = 3;
+// Interlink non-isolated channel diable pin. LOW = disable
+const int interlinkNonIsolatedDisablePin = 4;
 
 // Pins for SD Card module
-const int chipSelect = 53; // Use pin 10 for Uno/Nano, change to 53 for Mega
+const int chipSelect = 53;  // Use pin 10 for Uno/Nano, change to 53 for Mega
 
 // Turbidity sensor pin
-const int turbidityPin = A1; // Analog pin for turbidity sensor
- 
+const int turbidityPin = A1;  // Analog pin for turbidity sensor
+
 String filename = "sensor.csv";
 
-//RTC 
+//RTC
 DS3231 rtc;
 
 // ****************************************
 // EZO interlink sensor configuraiton
-Ezo_board DO = Ezo_board(97, "DO"); //dissolved oxygen
-Ezo_board PH = Ezo_board(99, "PH"); //ph
-Ezo_board EC = Ezo_board(100, "EC"); //electrical conductivity
-Ezo_board RTD = Ezo_board(102, "RTD"); //temperature
+Ezo_board DO = Ezo_board(97, "DO");     //dissolved oxygen
+Ezo_board PH = Ezo_board(99, "PH");     //ph
+Ezo_board EC = Ezo_board(100, "EC");    //electrical conductivity
+Ezo_board RTD = Ezo_board(102, "RTD");  //temperature
 // ****************************************
 
 
@@ -41,9 +43,9 @@ Ezo_board RTD = Ezo_board(102, "RTD"); //temperature
 // SENSOR MEMORY MANAGEMENT
 
 // Single buffers to hold the current sensor readings
-char ph_receive_buffer[32]; 
-char rtd_receive_buffer[32]; 
-char do_receive_buffer[32]; 
+char ph_receive_buffer[32];
+char rtd_receive_buffer[32];
+char do_receive_buffer[32];
 char ec_receive_buffer[32];
 
 // Turbidity reading variable
@@ -53,7 +55,7 @@ float turbidityNTU = 0.0;
 
 // callback called upon the arduino waking
 // can be empty, but not null
-void wakeup(){
+void wakeup() {
 }
 
 // steps of sensor readings and sleeping
@@ -78,14 +80,14 @@ Sequencer4 readSequence(&step1, 1000, &step2, 1000, &step3, 1000, &sleepStep, 10
 float readTurbidity(float temperature) {
   // Read analog value from turbidity sensor
   int sensorValue = analogRead(turbidityPin);
-  
+
   // Convert to voltage (assuming 5V Arduino)
   float voltage = sensorValue * (5.0 / 1024.0);
-  
+
   // Convert voltage to NTU using quadratic formula for 5V operation
   // Based on DFRobot SEN0189 calibration: y = -1120.4x² + 5742.3x - 4352.9
   float ntu = -1120.4 * voltage * voltage + 5742.3 * voltage - 4352.9;
-  
+
   // Apply temperature compensation: turbidity readings typically increase by ~2% per °C above 20°C
   float tempCompensation = 1.0 + 0.02 * (temperature - 20.0);
   ntu = ntu / tempCompensation;
@@ -94,7 +96,7 @@ float readTurbidity(float temperature) {
   if (ntu < 0) {
     ntu = 0;
   }
-  
+
   return ntu;
 }
 
@@ -104,12 +106,13 @@ void initSD() {
   if (!SD.begin(chipSelect)) {
     Serial.println("Card failed, or not present");
     // Don't do anything more:
-    while (1);
+    while (1)
+      ;
   }
   Serial.println("card initialized.");
-  
+
   delay(100);
-  
+
   // Create CSV file with headers if it doesn't exist
   if (!SD.exists(filename)) {
     Serial.println("File doesn't exist, creating new file...");
@@ -145,7 +148,8 @@ void setup() {
 
   //set arduino sleep method
   pinMode(intPin, INPUT);
-  pinMode(interlinkDisablePin, OUTPUT);
+  pinMode(interlinkIsolatedDisablePin, OUTPUT);
+  pinMode(interlinkNonIsolatedDisablePin, OUTPUT);
   set_sleep_mode(SLEEP_MODE_PWR_DOWN);
   sleep_enable();
 
@@ -157,7 +161,7 @@ void setup() {
   Serial.println("In setup");
   // Initialize SD card
   initSD();
-  
+
   readSequence.reset();
   Serial.println("System ready - data will be saved to " + filename);
 }
@@ -166,7 +170,7 @@ void loop() {
   readSequence.run();
 }
 
-void step1(){
+void step1() {
   // Wake sensors and delay for time until stable reading
   wakeSensors();
 
@@ -176,10 +180,10 @@ void step1(){
   RTD.send_read_cmd();
 }
 
-void step2(){
-  enum Ezo_board::errors myerr = PH.receive_cmd(ph_receive_buffer,32);
-  RTD.receive_cmd(rtd_receive_buffer,32);
-  DO.receive_cmd(do_receive_buffer,32);
+void step2() {
+  enum Ezo_board::errors myerr = PH.receive_cmd(ph_receive_buffer, 32);
+  RTD.receive_cmd(rtd_receive_buffer, 32);
+  DO.receive_cmd(do_receive_buffer, 32);
 
   if ((RTD.get_error() == Ezo_board::SUCCESS) && (RTD.get_last_received_reading() > -1000.0)) {
     EC.send_read_with_temp_comp(RTD.get_last_received_reading());
@@ -189,27 +193,27 @@ void step2(){
   }
 }
 
-void step3(){
-  EC.receive_cmd(ec_receive_buffer,32);
+void step3() {
+  EC.receive_cmd(ec_receive_buffer, 32);
 
   // Read turbidity with temperature compensation
   float temperature = RTD.get_last_received_reading();
   if (temperature <= -1000.0) {
-    temperature = 25.0; // Default temperature if RTD reading failed
+    temperature = 25.0;  // Default temperature if RTD reading failed
   }
   turbidityNTU = readTurbidity(temperature);
 
   // Now we have all sensor readings - write immediately to SD card
   File dataFile = SD.open(filename, FILE_WRITE);
-  
+
   if (dataFile) {
     // Get current timestamp
     RTCDateTime dt = rtc.getDateTime();
-    
+
     // Write timestamp
     dataFile.print(rtc.dateFormat("Y-m-d H:i:s", dt));
     dataFile.print(",");
-    
+
     // Write sensor data
     dataFile.print(ph_receive_buffer);
     dataFile.print(",");
@@ -219,9 +223,9 @@ void step3(){
     dataFile.print(",");
     dataFile.print(ec_receive_buffer);
     dataFile.print(",");
-    dataFile.print(turbidityNTU, 2); // Print with 2 decimal places
+    dataFile.print(turbidityNTU, 2);  // Print with 2 decimal places
     dataFile.println();
-    
+
     dataFile.close();
     Serial.println("Data saved to SD card");
   } else {
@@ -233,7 +237,7 @@ void step3(){
     Serial.print(rtd_receive_buffer);
     Serial.print(";");
     Serial.print(do_receive_buffer);
-    Serial.print(";");  
+    Serial.print(";");
     Serial.print(ec_receive_buffer);
     Serial.print(";");
     Serial.print(turbidityNTU, 2);
@@ -242,33 +246,31 @@ void step3(){
   takenReadingThisWakeCycle = true;
 }
 
-void goToSleep(){
-    Serial.println("Preparing for sleep...");
-    sleepSensors(); // Sleep all our sensors
-    digitalWrite(interlinkDisablePin, HIGH); // Disable Interlink channels
-    Serial.flush(); // Ensure all serial data is sent before clock change
-    
-    // Lower clock speed to save power (16MHz -> 2MHz)
-    clock_prescale_set(clock_div_8); // Divide by 8
-    
-    //sleeping, to be woken by interrupt pin
-    attachInterrupt(digitalPinToInterrupt(intPin), wakeup, LOW);
-    delay(50); // Shorter delay due to slower clock
-    sleep_cpu();
+void goToSleep() {
+  Serial.println("Preparing for sleep...");
+  sleepSensors();  // Sleep all our sensors
+  sleepInterlinkChannels();
+  Serial.flush();  // Ensure all serial data is sent before clock change
 
-    //waking
-    detachInterrupt(digitalPinToInterrupt(intPin));
-    rtc.clearAlarm1();
-    
-    // Restore full clock speed after waking
-    clock_prescale_set(clock_div_1); // No division (full 16MHz)
+  // Lower clock speed to save power (16MHz -> 2MHz)
+  clock_prescale_set(clock_div_16);  // Divide by 8
 
-    digitalWrite(interlinkDisablePin, LOW); // Re-enable Interlink channels
+  //sleeping, to be woken by interrupt pin
+  attachInterrupt(digitalPinToInterrupt(intPin), wakeup, LOW);
+  delay(50);  // Shorter delay due to slower clock
+  sleep_cpu();
 
-    Serial.println("Awake! Clock speed restored.");
+  //waking
+  detachInterrupt(digitalPinToInterrupt(intPin));
+  rtc.clearAlarm1();
+
+  // Restore full clock speed after waking
+  clock_prescale_set(clock_div_1);  // No division (full 16MHz)
+  wakeInterlinkChannels();
+  Serial.println("Awake! Clock speed restored.");
 }
 
-// Sleep all sensors indefinitely until any other command is issued. 
+// Sleep all sensors indefinitely until any other command is issued.
 void sleepSensors() {
   char* sleepCommand = "Sleep";
   DO.send_cmd(sleepCommand);
@@ -278,7 +280,7 @@ void sleepSensors() {
   Serial.println("ALL sensors sleeping...");
 }
 
-// Send an arbitrary command to wake all sensors + delay 
+// Send an arbitrary command to wake all sensors + delay
 void wakeSensors() {
   char* wakeCommand = "Status";
   DO.send_cmd(wakeCommand);
@@ -289,8 +291,20 @@ void wakeSensors() {
   delay(20000);
 }
 
+void sleepInterlinkChannels() {
+  digitalWrite(interlinkNonIsolatedDisablePin, LOW);
+  digitalWrite(interlinkIsolatedDisablePin, HIGH);
+  Serial.println("Sleeping interlink channels...");
+}
 
-void sleepStep(){
+void wakeInterlinkChannels() {
+  digitalWrite(interlinkNonIsolatedDisablePin, HIGH);
+  digitalWrite(interlinkIsolatedDisablePin, LOW);
+  Serial.println("Waking interlink channels...");
+}
+
+
+void sleepStep() {
   RTCDateTime dt = rtc.getDateTime();
   Serial.println(dt.hour);
   Serial.println(dt.hour % 2 != 0);
@@ -298,13 +312,12 @@ void sleepStep(){
     goToSleep();
     dt = rtc.getDateTime();
   }
-  if(takenReadingThisWakeCycle = true) {
+  if (takenReadingThisWakeCycle = true) {
     Serial.println("Already taken a reading");
-    goToSleep(); //taking another reading this minute is redundant
+    goToSleep();  //taking another reading this minute is redundant
     dt = rtc.getDateTime();
   }
-    Serial.println(rtc.dateFormat("H:i:s", dt));
-    delay(100);
-    takenReadingThisWakeCycle = false;
+  Serial.println(rtc.dateFormat("H:i:s", dt));
+  delay(100);
+  takenReadingThisWakeCycle = false;
 }
-
