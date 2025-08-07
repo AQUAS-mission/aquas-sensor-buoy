@@ -2,12 +2,12 @@
 #include <Wire.h>
 #include <Ezo_i2c_util.h>
 #include <SPIFFS.h>
-#include <time.h>
 #include <esp_sleep.h>
 #include <esp_wifi.h>
 #include <esp_bt.h>
 #include <driver/adc.h>
 #include <esp_adc_cal.h>
+#include <DS3231.h>
 
 // Interlink isolated channel disable pin. HIGH = disable
 const int interlinkIsolatedDisablePin = 3;
@@ -21,6 +21,9 @@ const int turbidityPin = 34;
 const uint64_t SLEEP_DURATION = 3600000000ULL; // 1 hour
 
 String filename = "/sensor.csv";
+
+// RTC object
+DS3231 rtc;
 
 // ****************************************
 // EZO interlink sensor configuration
@@ -44,6 +47,18 @@ float turbidityNTU = 0.0;
 
 // ADC calibration
 esp_adc_cal_characteristics_t adc_chars;
+
+// Overall system error code (0 = success)
+// Error Code System:
+// 0 = Success (all sensors working)
+// 1 = RTC error (time not available)
+// 2 = pH sensor error
+// 3 = RTD (temperature) sensor error  
+// 4 = DO (dissolved oxygen) sensor error
+// 5 = EC (electrical conductivity) sensor error
+// 6 = Turbidity sensor error
+// 7 = Multiple errors present
+int system_error_code = 0;
 
 // ****************************************
 
@@ -89,7 +104,7 @@ void initSPIFFS() {
     File dataFile = SPIFFS.open(filename, FILE_WRITE);
     if (dataFile) {
       Serial.println("File opened successfully, writing headers...");
-      dataFile.println("timestamp,ph,temperature,dissolved_oxygen,electrical_conductivity,turbidity_ntu");
+      dataFile.println("timestamp,ph,temperature,dissolved_oxygen,electrical_conductivity,turbidity_ntu,error_code");
       dataFile.close();
       Serial.println("Created new CSV file with headers");
     } else {
@@ -116,32 +131,36 @@ void disableUnnecessaryPeripherals() {
 }
 
 void setupTime() {
-  // Set timezone (adjust for your location)
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  // Initialize RTC
+  rtc.begin();
   
-  // Wait for time to be set
-  Serial.println("Waiting for NTP time sync...");
-  time_t now = 0;
-  struct tm timeinfo = { 0 };
-  int retry = 0;
-  const int retry_count = 10;
-  
-  while (timeinfo.tm_year < (2016 - 1900) && ++retry < retry_count) {
-    Serial.print(".");
-    delay(1000);
-    time(&now);
-    localtime_r(&now, &timeinfo);
+  // Set time to compile time if RTC is not running
+  if (!rtc.isrunning()) {
+    Serial.println("RTC is NOT running, setting to compile time!");
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
   }
   
-  if (retry < retry_count) {
-    Serial.println("Time synchronized");
+  // Check if RTC is working properly
+  DateTime now = rtc.now();
+  if (now.year() < 2020) {
+    system_error_code = 1; // RTC error
+    Serial.println("Error: RTC not working properly");
   } else {
-    Serial.println("Failed to get time, using default");
+    Serial.printf("Current time: %04d-%02d-%02d %02d:%02d:%02d\n", 
+                  now.year(), now.month(), now.day(),
+                  now.hour(), now.minute(), now.second());
   }
 }
 
 void setup() {
-  // Disable unnecessary peripherals first
+  // Initialize Serial first for debugging
+  Serial.begin(9600);
+  Serial.println("ESP32 Sensor Buoy Starting...");
+  
+  // Set up time BEFORE disabling WiFi
+  setupTime();
+  
+  // Disable unnecessary peripherals after time sync
   disableUnnecessaryPeripherals();
   
   // Set up pins
@@ -151,15 +170,8 @@ void setup() {
   // Initialize I2C
   Wire.begin();
   
-  // Initialize Serial
-  Serial.begin(9600);
-  Serial.println("ESP32 Sensor Buoy Starting...");
-  
   // Initialize SPIFFS
   initSPIFFS();
-  
-  // Set up time
-  setupTime();
   
   // Initialize ADC for turbidity sensor
   analogReadResolution(12);
@@ -191,36 +203,97 @@ void takeSensorReadings() {
   // Wake sensors and delay for time until stable reading
   wakeSensors();
   
-  // Step 1: Send read commands
+  // Step 1: Send read commands to DO, PH, and RTD
+  Serial.println("Step 1: Sending read commands...");
   DO.send_read_cmd();
   PH.send_read_cmd();
   RTD.send_read_cmd();
   
-  delay(1000); // Wait for sensors to respond
+  // Step 2: Wait for and receive readings from DO, PH, RTD
+  Serial.println("Step 2: Receiving readings from DO, PH, RTD...");
   
-  // Step 2: Receive readings
-  enum Ezo_board::errors myerr = PH.receive_cmd(ph_receive_buffer, 32);
-  RTD.receive_cmd(rtd_receive_buffer, 32);
-  DO.receive_cmd(do_receive_buffer, 32);
+  // Wait for DO sensor to be ready
+  while (DO.get_error() == Ezo_board::NOT_READY) {
+    delay(100);
+  }
+  enum Ezo_board::errors do_err = DO.receive_cmd(do_receive_buffer, 32);
+  
+  // Wait for PH sensor to be ready
+  while (PH.get_error() == Ezo_board::NOT_READY) {
+    delay(100);
+  }
+  enum Ezo_board::errors ph_err = PH.receive_cmd(ph_receive_buffer, 32);
+  
+  // Wait for RTD sensor to be ready
+  while (RTD.get_error() == Ezo_board::NOT_READY) {
+    delay(100);
+  }
+  enum Ezo_board::errors rtd_err = RTD.receive_cmd(rtd_receive_buffer, 32);
 
+  // Check for sensor errors and set system error code
+  int error_count = 0;
+  
+  if (ph_err != Ezo_board::SUCCESS) {
+    Serial.println("Warning: pH sensor communication error");
+    system_error_code = 2; // pH sensor error
+    error_count++;
+  }
+  if (rtd_err != Ezo_board::SUCCESS) {
+    Serial.println("Warning: RTD sensor communication error");
+    system_error_code = 3; // RTD sensor error
+    error_count++;
+  }
+  if (do_err != Ezo_board::SUCCESS) {
+    Serial.println("Warning: DO sensor communication error");
+    system_error_code = 4; // DO sensor error
+    error_count++;
+  }
+
+  // Step 3: Send EC command with temperature compensation
+  Serial.println("Step 3: Sending EC command with temperature compensation...");
   if ((RTD.get_error() == Ezo_board::SUCCESS) && (RTD.get_last_received_reading() > -1000.0)) {
     EC.send_read_with_temp_comp(RTD.get_last_received_reading());
+    Serial.println("EC command sent with temperature compensation");
   } else {
     // Default case: EC with 25˚C default temperature
     EC.send_read_with_temp_comp(25.0);
+    Serial.println("EC command sent with default temperature (25°C)");
   }
   
-  delay(1000); // Wait for EC sensor to respond
+  // Step 4: Wait for and receive EC reading
+  Serial.println("Step 4: Receiving EC reading...");
+  while (EC.get_error() == Ezo_board::NOT_READY) {
+    delay(100);
+  }
+  enum Ezo_board::errors ec_err = EC.receive_cmd(ec_receive_buffer, 32);
   
-  // Step 3: Receive EC reading and read turbidity
-  EC.receive_cmd(ec_receive_buffer, 32);
+  if (ec_err != Ezo_board::SUCCESS) {
+    Serial.println("Warning: EC sensor communication error");
+    system_error_code = 5; // EC sensor error
+    error_count++;
+  }
 
-  // Read turbidity with temperature compensation
+  // Step 5: Read turbidity with temperature compensation
+  Serial.println("Step 5: Reading turbidity sensor...");
   float temperature = RTD.get_last_received_reading();
   if (temperature <= -1000.0) {
     temperature = 25.0;  // Default temperature if RTD reading failed
+    Serial.println("Using default temperature (25°C) for turbidity compensation");
   }
   turbidityNTU = readTurbidity(temperature);
+  
+  // Check for turbidity sensor error (out of range readings)
+  if (turbidityNTU < 0 || turbidityNTU > 3000) {
+    system_error_code = 6; // Turbidity sensor error
+    Serial.println("Warning: Turbidity reading out of range");
+    error_count++;
+  }
+
+  // Check for multiple errors and set error code to 7 if multiple sensors failed
+  if (error_count > 1) {
+    system_error_code = 7; // Multiple errors present
+    Serial.printf("Warning: Multiple sensor errors detected (%d sensors failed)\n", error_count);
+  }
 
   // Write data to SPIFFS
   writeDataToFile();
@@ -233,14 +306,14 @@ void writeDataToFile() {
   File dataFile = SPIFFS.open(filename, FILE_APPEND);
 
   if (dataFile) {
-    // Get current timestamp
-    time_t now;
-    struct tm timeinfo;
-    time(&now);
-    localtime_r(&now, &timeinfo);
+    // Get current timestamp from RTC
+    DateTime now = rtc.now();
     
+    // Format timestamp as YYYY-MM-DD HH:MM:SS
     char timestamp[64];
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &timeinfo);
+    snprintf(timestamp, sizeof(timestamp), "%04d-%02d-%02d %02d:%02d:%02d",
+             now.year(), now.month(), now.day(),
+             now.hour(), now.minute(), now.second());
 
     // Write timestamp
     dataFile.print(timestamp);
@@ -256,6 +329,8 @@ void writeDataToFile() {
     dataFile.print(ec_receive_buffer);
     dataFile.print(",");
     dataFile.print(turbidityNTU, 2);  // Print with 2 decimal places
+    dataFile.print(",");
+    dataFile.print(system_error_code);  // Print error code
     dataFile.println();
 
     dataFile.close();
@@ -268,6 +343,7 @@ void writeDataToFile() {
     Serial.print("DO: "); Serial.println(do_receive_buffer);
     Serial.print("EC: "); Serial.println(ec_receive_buffer);
     Serial.print("Turbidity: "); Serial.println(turbidityNTU, 2);
+    Serial.print("Error Code: "); Serial.println(system_error_code);
     
   } else {
     Serial.println("Error opening " + filename + " for writing");
@@ -282,6 +358,8 @@ void writeDataToFile() {
     Serial.print(ec_receive_buffer);
     Serial.print(";");
     Serial.print(turbidityNTU, 2);
+    Serial.print(";");
+    Serial.print(system_error_code);
     Serial.println();
   }
 }

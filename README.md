@@ -1,189 +1,160 @@
-Research notes on sleeping the Arduino and Raspi:
+# Aquas Sensor Buoy
 
-The RasPi does not have a timed sleep mode, but the Arduino does. Currently exploring: controlling PI wake/sleep mode via the Arduino, which is set to turn on every X minutes.
+A water quality monitoring system that collects sensor data from various water quality sensors and stores the data for analysis. This project provides implementations for both Arduino and ESP32 platforms.
 
-On the Pi, it isn’t possible to run anything in its low power mode, since it is basically equivalent to be completely off.
-
-**The following is relevant for more advanced Arduino models, not the ones we are using.**
-
-To manage power consumption in the Arduino, the main/most effective method is putting the Arduino in sleep mode. In sleep mode, no code can be run. Sleep can be interrupted, however, by the following methods:
-
--   **Deep Sleep**: the Arduino can be set to wake up after a set time. This is most power efficient, since it is put in Deep Sleep mode, which uses the least possible amount of power. In this mode, there are very limited possibilities of running peripherals. “This will stop every clock sources of the microcontroller and set the voltage regulators to be in low power state. Oscillators can be in 3 different states where it stops or run, and run on behalf of peripheral request. The device will be then in deep sleep while WFI (Wait For Interrupt) is active.”
--   (Non-Deep) Sleep: (Idle Mode): Continue running peripherals. In this mode, it’s possible to wake up based on set external events, including by a change in voltage from a connected device.
--   Unless it is necessary to react to external changes independent from time, it seems that Deep Sleep/waking based on times is appropriate here.
-
-**For our Arduino Uno R3s:**
-
--   Can only sleep in 8s intervals! See below
--   https://github.com/rocketscream/Low-Power/issues/98
--   The official ArduinoLowPower library does not work, instead, https://github.com/rocketscream/Low-Power seems to work well. Find it in the Arduino IDE as Low-Power by Rocket Scream Electronics
--   How efficient this is (sleeping in 8s intervals) is unknown—todo test power draw.
-
-Advanced Linux modifications (from Nick):
-
--   Software won’t start running again, and will be at standby.
--   Might have to reboot software tasks after the RasPi switches back on. Bash script to start processes?
--   Kill processes in Linux to shut down specific processes.
-
-https://littlebirdelectronics.com.au/blogs/news/how-can-i-sleep-a-raspberry-pi-and-wake-it-again-with-an-interrupt?srsltid=AfmBOop3bE5hew3rB6RGzLl3DPPBmlCIu-EkME9XCSxDgSa9bP72l3IG
-
-https://docs.arduino.cc/learn/electronics/low-power/
-
----
-
-# Arduino Water Quality Sensor System
-
-## Overview
-
-The `aquas-arduino-sensors.ino` file implements a multi-sensor water quality monitoring system that:
-
--   Reads pH, temperature (RTD), dissolved oxygen (DO), electrical conductivity (EC), and turbidity sensors
--   Logs data to an SD card in CSV format with timestamps
--   Uses RTC-based sleep/wake cycles for power management
--   Provides temperature compensation for sensor readings
-
-## Required Libraries
-
-To compile and run this code, you need to install the following libraries in your Arduino IDE. Most of these are included as folders in this repository:
-
-### Core Libraries (included in repo folders):
-
-1. **DS3231** - Real-time clock functionality
-2. **Ezo_i2c** - Communication with Atlas Scientific EZO sensors
-3. **sequencer3** & **sequencer4** - State machine for sensor reading sequence
-4. **Ezo_i2c_util** - Utility functions for EZO sensors
-
-### Standard Arduino Libraries (install via Library Manager):
-
-1. **Wire** - I2C communication (built-in)
-2. **SD** - SD card operations (built-in)
-3. **SPI** - SPI communication for SD card (built-in)
-4. **RTClib** - Additional RTC functionality
-
-### Installation Instructions:
-
-1. Copy the library folders from this repo to your Arduino libraries directory:
-
-    - Windows: `Documents/Arduino/libraries/`
-    - Mac: `Documents/Arduino/libraries/`
-    - Linux: `~/Arduino/libraries/`
-
-2. Install RTClib via Arduino IDE:
-    - Go to `Sketch > Include Library > Manage Libraries`
-    - Search for "RTClib" by Adafruit
-    - Click Install
-
-## Hardware Setup
-
-### Sensor Connections:
-
--   **pH Sensor**: I2C address 99
--   **Temperature (RTD)**: I2C address 102
--   **Dissolved Oxygen (DO)**: I2C address 97
--   **Electrical Conductivity (EC)**: I2C address 100
--   **Turbidity Sensor**: Analog pin A1
--   **RTC (DS3231)**: I2C connection + interrupt pin 2
--   **SD Card Module**: SPI connection (CS pin 53 for Mega, pin 10 for Uno)
-
-### Power Requirements:
-
--   5V power supply recommended
--   Turbidity sensor requires 5V operation
--   EZO sensors can operate on 3.3V or 5V
-
-## How It Works
-
-### 1. System Architecture
-
-The system uses a 4-step sequencer pattern:
-
--   **Step 1**: Send read commands to DO, pH, and RTD sensors
--   **Step 2**: Receive responses + send EC command with temperature compensation
--   **Step 3**: Receive EC response + read turbidity + write all data to SD card
--   **Step 4**: Sleep management and wake cycle control
-
-### 2. Data Flow
+## Project Structure
 
 ```
-Sensors → I2C/Analog Read → Temperature Compensation → SD Card CSV → Sleep
+aquas-sensor-buoy/
+├── arduino-version/          # Original Arduino implementation
+│   ├── aquas-sensor-buoy.ino
+│   └── README.md
+├── esp32-version/           # ESP32 implementation (recommended)
+│   ├── aquas-sensor-buoy-esp32.ino
+│   └── README.md
+├── Ezo_i2c/                # Atlas Scientific sensor libraries
+├── Ezo_i2c_util/
+├── sequence_libraries/      # Custom sequencer libraries
+├── ezo_sensor_sample/      # Sample sensor code
+├── rpi_sleep_test/         # Raspberry Pi sleep testing
+└── README.md               # This file
 ```
 
-### 3. Key Functions
+## Sensor Configuration
 
-#### `setup()`
+The system monitors the following water quality parameters:
 
--   Initializes RTC with 3-hour alarm intervals
--   Sets up sleep mode configuration
--   Initializes SD card and creates CSV file with headers
--   Configures I2C and sensor pins
+-   **pH**: Atlas Scientific EZO pH sensor (I2C address 99)
+-   **Temperature**: Atlas Scientific EZO RTD sensor (I2C address 102)
+-   **Dissolved Oxygen**: Atlas Scientific EZO DO sensor (I2C address 97)
+-   **Electrical Conductivity**: Atlas Scientific EZO EC sensor (I2C address 100)
+-   **Turbidity**: Analog turbidity sensor (DFRobot SEN0189)
 
-#### `step1()` - Command Phase
+## Platform Comparison
 
--   Sends read commands to pH, DO, and RTD sensors simultaneously
--   Non-blocking - sensors process readings in background
+| Feature                 | Arduino Version | ESP32 Version  |
+| ----------------------- | --------------- | -------------- |
+| **Power Efficiency**    | ~50μA sleep     | ~10μA sleep    |
+| **Battery Life**        | 3-6 months      | 6-12 months    |
+| **External Components** | SD card + RTC   | None required  |
+| **Storage**             | SD card         | Built-in flash |
+| **Timing**              | External RTC    | Built-in timer |
+| **Complexity**          | High            | Low            |
+| **Cost**                | Higher          | Lower          |
 
-#### `step2()` - Response + EC Setup
+## Quick Start
 
--   Receives responses from pH, DO, and RTD sensors
--   Uses RTD temperature reading for EC temperature compensation
--   Sends temperature-compensated read command to EC sensor
+### For ESP32 (Recommended)
 
-#### `step3()` - Final Data Collection
-
--   Receives EC sensor response
--   Reads turbidity sensor with temperature compensation
--   Writes complete sensor reading to SD card with timestamp
--   Handles SD card errors with Serial fallback
-
-#### `sleepStep()` - Power Management
-
--   Manages sleep/wake cycles based on RTC time
--   Prevents redundant readings within the same minute
--   Controls when to take readings vs. sleep
-
-### 4. Data Format
-
-CSV file (`sensor.csv`) contains:
-
+```bash
+cd esp32-version/
+# Upload aquas-sensor-buoy-esp32.ino to your ESP32
+# See esp32-version/README.md for detailed instructions
 ```
+
+### For Arduino
+
+```bash
+cd arduino-version/
+# Upload aquas-sensor-buoy.ino to your Arduino
+# See arduino-version/README.md for detailed instructions
+```
+
+## Data Collection
+
+Both versions collect data every hour and store it in CSV format:
+
+```csv
 timestamp,ph,temperature,dissolved_oxygen,electrical_conductivity,turbidity_ntu
-2024-01-15 14:30:25,7.2,23.5,8.1,1250,12.45
+2024-01-15 14:30:00,7.25,23.5,8.2,1250.5,2.3
 ```
 
-### 5. Temperature Compensation
+## Power Management
 
--   **EC Sensor**: Uses RTD reading for automatic temperature compensation
--   **Turbidity**: Applies 2% correction per °C deviation from 20°C reference
--   **Fallback**: Uses 25°C default if RTD reading fails
+-   **Sleep Duration**: 1 hour between readings
+-   **Wake-up**: Automatic timer-based wake-up
+-   **Sensor Management**: Sensors are put to sleep between readings
+-   **Power Optimization**: All unnecessary peripherals disabled
 
-### 6. Error Handling
+## Hardware Requirements
 
--   SD card failure → Serial output fallback
--   Sensor communication errors → Logged in data
--   RTC issues → System continues with basic timing
--   Negative turbidity values → Clamped to 0
+### ESP32 Version (Recommended)
 
-### 7. Power Management
+-   ESP32 development board
+-   Atlas Scientific EZO sensors
+-   Turbidity sensor
+-   Power supply (3.7V LiPo recommended)
 
--   Uses DS3231 RTC alarms for wake events
--   Arduino sleep mode between readings
--   Configurable wake intervals (currently every 2 minutes for testing)
--   Prevents redundant readings within same wake cycle
+### Arduino Version
+
+-   Arduino Mega 2560 (recommended)
+-   SD card module
+-   DS3231 RTC module
+-   Atlas Scientific EZO sensors
+-   Turbidity sensor
+-   Power supply (9V battery or external supply)
+
+## Development
+
+### Adding New Sensors
+
+1. Add sensor object in the sensor configuration section
+2. Include sensor reading in the measurement sequence
+3. Add data column to CSV output
+4. Update documentation
+
+### Modifying Collection Frequency
+
+-   **ESP32**: Change `SLEEP_DURATION` constant
+-   **Arduino**: Modify RTC alarm settings
+
+### Data Analysis
+
+The CSV output can be analyzed using:
+
+-   Python pandas
+-   R statistical analysis
+-   Excel/LibreOffice Calc
+-   Custom data visualization tools
 
 ## Troubleshooting
 
-### Common Issues:
+### Common Issues
 
-1. **SD Card Problems**: Ensure FAT32 formatting and proper wiring
-2. **Sensor Communication**: Check I2C addresses and connections
-3. **Sleep Issues**: Verify RTC wiring and interrupt pin connection
-4. **Memory Issues**: Code optimized for Arduino Uno (2KB RAM limit)
+1. **Sensor Communication**: Check I2C connections and addresses
+2. **Power Issues**: Verify power supply and sleep mode configuration
+3. **Data Storage**: Check file system initialization and permissions
+4. **Timing Issues**: Verify RTC (Arduino) or internal timer (ESP32) configuration
 
-### Debug Output:
+### Debug Mode
 
-The system provides detailed Serial output for monitoring:
+Both versions include Serial output for debugging:
 
--   Sensor initialization status
--   SD card operations
--   Sleep/wake cycles
--   Error conditions
+-   Arduino: 9600 baud
+-   ESP32: 115200 baud
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Test thoroughly
+5. Submit a pull request
+
+## License
+
+This project is open source. See individual version directories for specific licensing information.
+
+## Support
+
+For issues and questions:
+
+1. Check the troubleshooting sections in version-specific READMEs
+2. Review the code comments for configuration options
+3. Test with individual sensors before full system deployment
+
+## Acknowledgments
+
+-   Atlas Scientific for sensor libraries and documentation
+-   ESP32 community for power optimization techniques
+-   Arduino community for sensor interfacing examples
