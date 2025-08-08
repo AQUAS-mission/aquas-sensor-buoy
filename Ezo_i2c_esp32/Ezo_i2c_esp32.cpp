@@ -1,5 +1,5 @@
 
-#include "Ezo_i2c.h"
+#include "Ezo_i2c_esp32.h"
 #include "Arduino.h"
 #include "Wire.h"
 #include <stdlib.h>

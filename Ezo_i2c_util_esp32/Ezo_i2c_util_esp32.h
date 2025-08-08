@@ -1,6 +1,6 @@
 
-#ifndef EZO_I2C_UTIL_H
-#define EZO_I2C_UTIL_H
+#ifndef EZO_I2C_UTIL_ESP32_H
+#define EZO_I2C_UTIL_ESP32_H
 
 #include "Arduino.h"
 
