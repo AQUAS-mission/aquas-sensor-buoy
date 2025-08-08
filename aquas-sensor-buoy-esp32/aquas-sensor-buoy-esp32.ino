@@ -1,6 +1,6 @@
-#include <Ezo_i2c.h>
+#include <Ezo_i2c_esp32.h>
 #include <Wire.h>
-#include <Ezo_i2c_util.h>
+#include <Ezo_i2c_util_esp32.h>
 #include <SPIFFS.h>
 #include <esp_sleep.h>
 #include <esp_wifi.h>
@@ -118,7 +118,7 @@ void initSPIFFS() {
 
 void disableUnnecessaryPeripherals() {
   // Disable WiFi
-  WiFi.mode(WIFI_OFF);
+  WiFi.mode(WIFI_MODE_NULL);
   esp_wifi_stop();
   
   // Disable Bluetooth
