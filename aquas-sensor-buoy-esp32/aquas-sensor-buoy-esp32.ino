@@ -8,6 +8,7 @@
 #include <driver/adc.h>
 #include <esp_adc_cal.h>
 #include <DS3231.h>
+#include <WiFi.h>
 
 // Interlink isolated channel disable pin. HIGH = disable
 const int interlinkIsolatedDisablePin = 3;
@@ -124,8 +125,9 @@ void disableUnnecessaryPeripherals() {
   esp_bt_controller_disable();
   esp_bt_controller_deinit();
   
-  // Disable ADC2 (used by WiFi)
-  adc2_power_release();
+  // Note: adc2_power_release() is not available in all ESP32 Arduino versions
+  // Removing this call as it's not essential for power saving
+  // adc2_power_release();
   
   Serial.println("Unnecessary peripherals disabled");
 }
@@ -135,20 +137,23 @@ void setupTime() {
   rtc.begin();
   
   // Set time to compile time if RTC is not running
-  if (!rtc.isrunning()) {
+  // Note: DS3231 library for ESP32 may have different API
+  // Using RTCDateTime instead of DateTime
+  RTCDateTime dt = rtc.getDateTime();
+  if (dt.year < 2020) {
     Serial.println("RTC is NOT running, setting to compile time!");
-    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    rtc.setDateTime(__DATE__, __TIME__);
   }
   
   // Check if RTC is working properly
-  DateTime now = rtc.now();
-  if (now.year() < 2020) {
+  dt = rtc.getDateTime();
+  if (dt.year < 2020) {
     system_error_code = 1; // RTC error
     Serial.println("Error: RTC not working properly");
   } else {
     Serial.printf("Current time: %04d-%02d-%02d %02d:%02d:%02d\n", 
-                  now.year(), now.month(), now.day(),
-                  now.hour(), now.minute(), now.second());
+                  dt.year, dt.month, dt.day,
+                  dt.hour, dt.minute, dt.second);
   }
 }
 
@@ -307,13 +312,13 @@ void writeDataToFile() {
 
   if (dataFile) {
     // Get current timestamp from RTC
-    DateTime now = rtc.now();
+    RTCDateTime dt = rtc.getDateTime();
     
     // Format timestamp as YYYY-MM-DD HH:MM:SS
     char timestamp[64];
     snprintf(timestamp, sizeof(timestamp), "%04d-%02d-%02d %02d:%02d:%02d",
-             now.year(), now.month(), now.day(),
-             now.hour(), now.minute(), now.second());
+             dt.year, dt.month, dt.day,
+             dt.hour, dt.minute, dt.second);
 
     // Write timestamp
     dataFile.print(timestamp);
