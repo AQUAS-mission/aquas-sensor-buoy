@@ -4,17 +4,18 @@ This is the ESP32 version of the Aquas Sensor Buoy project. The code has been co
 
 ## Key Changes from Arduino Version
 
-### 1. **Flash Memory Storage (SPIFFS)**
+### 1. **External SD Card Storage**
 
--   Replaced external SD card with ESP32's built-in SPIFFS (SPI Flash File System)
--   Data is stored in `/sensor.csv` on the ESP32's flash memory
--   No external SD card module required
+-   Uses HW125 SD card module for persistent data storage
+-   Data is stored in `sensor.csv` on the SD card
+-   Data survives deep sleep cycles (unlike SPIFFS)
+-   Easy data retrieval by removing SD card
 
 ### 2. **ESP32 Deep Sleep**
 
--   Replaced external DS3231 RTC with ESP32's built-in deep sleep functionality
--   Uses `esp_deep_sleep_enable_timer_wakeup()` for precise timing
--   Sleep duration: 1 hour (3,600,000,000 microseconds)
+-   Uses ESP32's built-in deep sleep functionality with timer wakeup
+-   Uses `esp_sleep_enable_timer_wakeup()` for precise timing
+-   Sleep duration: 1 hour (3,576,009,000 microseconds)
 -   Much more power efficient than external RTC
 
 ### 3. **Peripheral Management**
@@ -32,7 +33,7 @@ This is the ESP32 version of the Aquas Sensor Buoy project. The code has been co
 
 ### 5. **Time Management**
 
--   Uses ESP32's built-in time functions with NTP sync
+-   Uses DS3231 RTC module for accurate timekeeping
 -   Automatic time synchronization on startup
 -   Timestamps in ISO format: `YYYY-MM-DD HH:MM:SS`
 
@@ -41,7 +42,8 @@ This is the ESP32 version of the Aquas Sensor Buoy project. The code has been co
 ### ESP32 Board
 
 -   Any ESP32 development board (ESP32 DevKit, ESP32-WROOM, etc.)
--   4MB flash memory recommended for data storage
+-   4MB flash memory recommended
+-   HW125 SD card module for data storage
 
 ### Sensors (Same as Arduino Version)
 
@@ -54,8 +56,8 @@ This is the ESP32 version of the Aquas Sensor Buoy project. The code has been co
 
 ### Interlink Channels
 
--   Interlink isolated channel disable pin: GPIO5
--   Interlink non-isolated channel disable pin: GPIO18
+-   Interlink isolated channel disable pin: GPIO26
+-   Interlink non-isolated channel disable pin: GPIO27
 
 ## Pin Connections
 
@@ -64,10 +66,21 @@ This is the ESP32 version of the Aquas Sensor Buoy project. The code has been co
 | I2C SDA                        | GPIO21    | Default ESP32 I2C SDA  |
 | I2C SCL                        | GPIO22    | Default ESP32 I2C SCL  |
 | Turbidity Sensor               | GPIO34    | ADC1_CH6, input only   |
-| Interlink Isolated Disable     | GPIO5     | Output, HIGH = disable |
-| Interlink Non-Isolated Disable | GPIO18    | Output, LOW = disable  |
+| Interlink Isolated Disable     | GPIO25    | Output, HIGH = disable |
+| Interlink Non-Isolated Disable | GPIO26    | Output, LOW = disable  |
 
-**Note**: ESP32 does not have GPIO pins 3 or 4. These pins were changed from the Arduino version to ensure compatibility.
+### HW125 SD Card Module Connections
+
+| SD Card Pin | ESP32 Pin | Notes                            |
+| ----------- | --------- | -------------------------------- |
+| VCC         | GPIO4     | Power control (HIGH=on, LOW=off) |
+| GND         | GND       | Ground                           |
+| MISO        | GPIO19    | SPI MISO (default)               |
+| MOSI        | GPIO23    | SPI MOSI (default)               |
+| SCK         | GPIO18    | SPI SCK (default)                |
+| CS          | GPIO5     | Chip select (custom pin)         |
+
+**Note**: Pin assignments have been optimized to avoid conflicts with SPI, I2C, and other critical functions. The VCC line is now controlled by GPIO4 for power management during deep sleep.
 
 ## Power Consumption
 
@@ -75,6 +88,7 @@ The ESP32 version is significantly more power efficient:
 
 -   **Deep Sleep**: ~10μA (vs Arduino's ~50μA)
 -   **Active Mode**: ~160mA during sensor readings
+-   **SD Card Power**: Controlled via GPIO4 (powered off during sleep)
 -   **Sleep Duration**: 1 hour between readings
 -   **Estimated Battery Life**: 6-12 months with 3.7V LiPo battery
 
@@ -88,7 +102,7 @@ The ESP32 version is significantly more power efficient:
 
 ## Data Format
 
-Data is stored in `/sensor.csv` with the following format:
+Data is stored in `sensor.csv` on the SD card with the following format:
 
 ```csv
 timestamp,ph,temperature,dissolved_oxygen,electrical_conductivity,turbidity_ntu
@@ -101,8 +115,10 @@ timestamp,ph,temperature,dissolved_oxygen,electrical_conductivity,turbidity_ntu
 
 In Arduino IDE, install these libraries:
 
--   `Ezo_i2c` (Atlas Scientific)
--   `Ezo_i2c_util` (Atlas Scientific)
+-   `Ezo_i2c_esp32` (Atlas Scientific ESP32 version)
+-   `Ezo_i2c_util_esp32` (Atlas Scientific ESP32 version)
+-   `DS3231` (RTC library)
+-   `SD` (built-in ESP32 library)
 
 ### 2. Configure Board Settings
 
@@ -117,7 +133,7 @@ In Arduino IDE, install these libraries:
 ### 3. Upload Code
 
 -   Upload the `aquas-sensor-buoy-esp32.ino` file
--   The ESP32 will automatically create the CSV file on first run
+-   The ESP32 will automatically create the CSV file on the SD card on first run
 
 ### 4. Monitor Output
 
@@ -134,7 +150,15 @@ Connect to Serial Monitor (115200 baud) to see:
 
 Data is printed to Serial during operation for debugging.
 
-### Method 2: SPIFFS File System
+### Method 2: SD Card (Recommended)
+
+Simply remove the SD card and read it on your computer:
+
+-   Insert SD card into computer or card reader
+-   Open `sensor.csv` with any spreadsheet application
+-   Data is preserved across deep sleep cycles
+
+### Method 3: WiFi Upload (Optional)
 
 You can add WiFi functionality temporarily to upload data:
 
@@ -144,23 +168,15 @@ WiFi.begin("SSID", "PASSWORD");
 // Upload data via HTTP or FTP
 ```
 
-### Method 3: SD Card (Optional)
-
-If you need external storage, you can add an SD card module:
-
-```cpp
-#include <SD.h>
-// Initialize SD card on SPI pins
-```
-
 ## Troubleshooting
 
 ### Common Issues
 
-1. **SPIFFS Mount Failed**
+1. **SD Card Mount Failed**
 
-    - Ensure board has sufficient flash memory
-    - Try uploading with "Erase All Contents" option
+    - Ensure SD card is properly formatted (FAT32)
+    - Check wiring connections (VCC, GND, MISO, MOSI, SCK, CS)
+    - Verify SD card is not corrupted
 
 2. **Sensor Communication Issues**
 
@@ -193,6 +209,12 @@ WiFi.begin("SSID", "PASSWORD");
 // Upload data to server
 ```
 
+### Change SD Card CS Pin
+
+```cpp
+const int sdCardCSPin = 4; // Change from GPIO5 to GPIO4 if needed
+```
+
 ### Modify Sensor Addresses
 
 ```cpp
@@ -204,7 +226,7 @@ Ezo_board PH = Ezo_board(99, "PH"); // Change 99 to your sensor's address
 1. **Use 3.3V Logic Level**: All sensors should operate at 3.3V
 2. **Minimize Active Time**: Keep sensor readings brief
 3. **Disable Debug Output**: Remove Serial.print() statements for production
-4. **Use External RTC**: For more precise timing, add DS3231 module
+4. **SD Card Power**: SD cards can draw significant current - consider powering down during sleep
 5. **Battery Monitoring**: Add voltage divider for battery level monitoring
 
 ## License

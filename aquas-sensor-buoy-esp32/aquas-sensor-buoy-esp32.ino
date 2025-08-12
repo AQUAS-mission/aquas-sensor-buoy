@@ -1,7 +1,8 @@
 #include <Ezo_i2c_esp32.h>
 #include <Wire.h>
 #include <Ezo_i2c_util_esp32.h>
-#include <SPIFFS.h>
+#include <SD.h>
+#include <SPI.h>
 #include <esp_sleep.h>
 #include <esp_wifi.h>
 #include <esp_bt.h>
@@ -15,11 +16,13 @@
 /*
  * ESP32 Sensor Buoy Operation Pattern:
  * 
- * 1. SETUP (runs once when powered on):
- *    - Run hardware diagnostics (if DEBUG_MODE enabled)
- *    - Test sensor communication (if DEBUG_MODE enabled)
- *    - Test complete sensor reading cycle (if DEBUG_MODE enabled)
+ * 1. SETUP (runs once when powered on):)
  *    - Initialize sequencer
+ *    - Initialize SD card
+ *    - Initialize ADC for turbidity sensor
+ *    - Calibrate ADC
+ *    - Wake up interlink channels
+ *    - Initialize the sequencer
  *    - Ready to run sensor sequence
  * 
  * 2. SEQUENCER OPERATION (runs continuously):
@@ -28,41 +31,28 @@
  *    - step3: Receive EC, read turbidity, write data, sleep sensors
  *    - sleepStep: Sleep interlink channels and go to deep sleep
  * 
- * 3. WAKE CYCLE (repeats every hour):
+ * 3. WAKE CYCLE (repeats every SLEEP_DURATION):
  *    - ESP32 wakes up from deep sleep
- *    - setup() runs again (skips diagnostics if not first time)
  *    - loop() runs sequencer again
  *    - sleepStep puts ESP32 back to deep sleep
  * 
- * This pattern ensures diagnostics run only when needed,
- * while maintaining reliable hourly data collection using the sequencer.
- * 
- * DIAGNOSTICS:
- * - All diagnostic functions have been moved to a separate file: diagnostics.ino
- * - To enable diagnostics, include diagnostics.ino in your Arduino project
- * - Set DEBUG_MODE = true to run diagnostics during setup
- * - Set DEBUG_MODE = false for production deployment (skips diagnostics)
- */
+*/
 
-// Debug flag - set to true to run diagnostics, false to skip them
-//
-// Usage:
-// - DEBUG_MODE = true:  Run full diagnostics, sensor tests, and reading tests
-//                       Useful for initial setup, troubleshooting, or development
-// - DEBUG_MODE = false: Skip diagnostics, go straight to sensor readings
-//                       Use for production deployment to save time and power
-const bool DEBUG_MODE = false;
+// SD Card power control pin (HIGH = power on, LOW = power off)
+const int sdCardPowerPin = 4;
+// SD Card CS pin
+const int sdCardCSPin = 5;
 
 // Interlink isolated channel disable pin. HIGH = disable
-const int interlinkIsolatedDisablePin = 5;
+const int interlinkIsolatedDisablePin = 25;  // Changed to avoid conflict with I2C SDA
 // Interlink non-isolated channel disable pin. LOW = disable
-const int interlinkNonIsolatedDisablePin = 18;
+const int interlinkNonIsolatedDisablePin = 26;  // Changed to avoid conflict with I2C SCL
 
 // Turbidity sensor pin (ADC1_CH6 on GPIO34)
 const int turbidityPin = 34;
 
 // Sleep duration in microseconds (1 hour = 3600000000 microseconds)
-// const uint64_t SLEEP_DURATION = 3600000000ULL;  // 1 hour
+// const uint64_t SLEEP_DURATION = 3576009000ULL;  // 1 hour - sensor collection delay.
 const uint64_t SLEEP_DURATION = 60000000ULL;  // 1 minute
 
 String filename = "/sensor.csv";
@@ -142,22 +132,38 @@ float readTurbidity(float temperature) {
   return ntu;
 }
 
-void initSPIFFS() {
-  // Initialize SPIFFS
-  Serial.print("Initializing SPIFFS...");
-  if (!SPIFFS.begin(true)) {
-    Serial.println("SPIFFS failed to mount");
+void powerOnSDCard() {
+  Serial.println("Powering on SD card...");
+  digitalWrite(sdCardPowerPin, HIGH);
+  delay(100);  // Give SD card time to power up
+}
+
+void powerOffSDCard() {
+  Serial.println("Powering off SD card...");
+  digitalWrite(sdCardPowerPin, LOW);
+  delay(50);   // Brief delay to ensure power off
+}
+
+void initSD() {
+  // Power on SD card first
+  powerOnSDCard();
+  
+  // Initialize SD card
+  Serial.print("Initializing SD card...");
+  if (!SD.begin(sdCardCSPin)) {
+    Serial.println("SD card failed, or not present");
+    Serial.println("Check wiring and SD card");
     while (1)
       ;
   }
-  Serial.println("SPIFFS initialized.");
+  Serial.println("SD card initialized.");
 
   delay(100);
 
   // Create CSV file with headers if it doesn't exist
-  if (!SPIFFS.exists(filename)) {
+  if (!SD.exists(filename)) {
     Serial.println("File doesn't exist, creating new file...");
-    File dataFile = SPIFFS.open(filename, FILE_WRITE);
+    File dataFile = SD.open(filename, FILE_WRITE);
     if (dataFile) {
       Serial.println("File opened successfully, writing headers...");
       dataFile.println("timestamp,ph,temperature,dissolved_oxygen,electrical_conductivity,turbidity_ntu,error_code");
@@ -197,6 +203,7 @@ void setup() {
   // Set up pins
   pinMode(interlinkIsolatedDisablePin, OUTPUT);
   pinMode(interlinkNonIsolatedDisablePin, OUTPUT);
+  pinMode(sdCardPowerPin, OUTPUT);
   Serial.println("GPIO pins configured");
 
   // Initialize I2C with proper configuration
@@ -210,8 +217,8 @@ void setup() {
   Serial.printf("I2C initialized on SDA: %d, SCL: %d\n", SDA, SCL);
   Serial.println("I2C configured: 100kHz clock, 5s timeout");
 
-  // Initialize SPIFFS
-  initSPIFFS();
+  // Initialize SD card
+  initSD();
 
   // Initialize ADC for turbidity sensor
   Serial.println("Initializing ADC for turbidity sensor...");
@@ -288,7 +295,7 @@ void step3() {
 }
 
 void writeDataToFile() {
-  File dataFile = SPIFFS.open(filename, FILE_APPEND);
+  File dataFile = SD.open(filename, FILE_APPEND);
 
   if (dataFile) {
     // Get current timestamp from RTC
@@ -319,7 +326,7 @@ void writeDataToFile() {
     dataFile.println();
 
     dataFile.close();
-    Serial.println("Data saved to SPIFFS");
+    Serial.println("Data saved to SD card");
 
     // Print to Serial for debugging
     Serial.print("Timestamp: ");
@@ -339,7 +346,7 @@ void writeDataToFile() {
 
   } else {
     Serial.println("Error opening " + filename + " for writing");
-    // Fallback to Serial output if SPIFFS fails
+    // Fallback to Serial output if SD card fails
     Serial.println("Fallback - printing to Serial:");
     Serial.print(ph_receive_buffer);
     Serial.print(";");
@@ -425,6 +432,10 @@ void sleepStep() {
   // Sleep interlink channels
   sleepInterlinkChannels();
 
+  // Power off SD card to save power during sleep
+  Serial.println("Powering off SD card...");
+  powerOffSDCard();
+
   // Additional safety: disable I2C to prevent communication attempts during sleep
   Serial.println("Disabling I2C communication...");
   Wire.end();
@@ -444,49 +455,14 @@ void sleepStep() {
   Serial.println("This should never be printed");
 }
 
-// Function to dump CSV data over serial (for Python script)
-void dumpCSVToSerial() {
-  Serial.println("=== CSV DATA DUMP ===");
-
-  File file = SPIFFS.open(filename, "r");
-  if (file) {
-    Serial.println("Dumping sensor.csv file...");
-
-    int lines_dumped = 0;
-    while (file.available()) {
-      String line = file.readStringUntil('\n');
-      Serial.print(line);
-      if (!line.endsWith("\n")) {
-        Serial.println();  // Add newline if missing
-      }
-      lines_dumped++;
-
-      // Progress indicator for large files
-      if (lines_dumped % 100 == 0) {
-        Serial.printf("Dumped %d lines...\n", lines_dumped);
-      }
-    }
-
-    file.close();
-    Serial.printf("=== END CSV DUMP ===\n");
-    Serial.printf("Total lines dumped: %d\n", lines_dumped);
-  } else {
-    Serial.println("Error: Could not open CSV file for dumping");
-  }
-}
-
 // Function to check for serial commands
 void checkSerialCommands() {
   if (Serial.available()) {
     String command = Serial.readStringUntil('\n');
     command.trim();
 
-    if (command == "dump") {
-      Serial.println("Received 'dump' command - starting CSV data dump...");
-      dumpCSVToSerial();
-    } else if (command == "help") {
+    if (command == "help") {
       Serial.println("Available commands:");
-      Serial.println("  dump - Download CSV data");
       Serial.println("  help - Show this help");
       Serial.println("  status - Show system status");
     } else if (command == "status") {
@@ -495,7 +471,7 @@ void checkSerialCommands() {
       Serial.printf("CSV file: %s\n", filename.c_str());
 
       // Check file size
-      File file = SPIFFS.open(filename, "r");
+      File file = SD.open(filename, "r");
       if (file) {
         Serial.printf("File size: %d bytes\n", file.size());
         file.close();
