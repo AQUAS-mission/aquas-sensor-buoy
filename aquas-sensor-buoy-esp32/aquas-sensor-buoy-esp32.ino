@@ -228,24 +228,6 @@ void setup() {
   Serial.println("Waking up interlink channels...");
   wakeInterlinkChannels();
 
-  // Test sensor communication only if DEBUG_MODE is enabled
-  if (DEBUG_MODE) {
-    Serial.println("DEBUG_MODE enabled - testing sensor communication...");
-    Serial.println("NOTE: Include diagnostics.ino in your project to enable diagnostics");
-    // testSensorCommunication(); // Function moved to diagnostics.ino
-  } else {
-    Serial.println("DEBUG_MODE disabled - skipping sensor communication test");
-  }
-
-  // Test a complete sensor reading cycle only if DEBUG_MODE is enabled
-  if (DEBUG_MODE) {
-    Serial.println("DEBUG_MODE enabled - testing complete sensor reading cycle...");
-    Serial.println("NOTE: Include diagnostics.ino in your project to enable diagnostics");
-    // testSensorReading(); // Function moved to diagnostics.ino
-  } else {
-    Serial.println("DEBUG_MODE disabled - skipping sensor reading test");
-  }
-
   Serial.println("System ready - data will be saved to " + filename);
 
   // Initialize the sequencer (like Arduino version)
