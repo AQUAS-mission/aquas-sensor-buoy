@@ -54,8 +54,8 @@ This is the ESP32 version of the Aquas Sensor Buoy project. The code has been co
 
 ### Interlink Channels
 
--   Interlink isolated channel disable pin: GPIO3
--   Interlink non-isolated channel disable pin: GPIO4
+-   Interlink isolated channel disable pin: GPIO5
+-   Interlink non-isolated channel disable pin: GPIO18
 
 ## Pin Connections
 
@@ -64,8 +64,10 @@ This is the ESP32 version of the Aquas Sensor Buoy project. The code has been co
 | I2C SDA                        | GPIO21    | Default ESP32 I2C SDA  |
 | I2C SCL                        | GPIO22    | Default ESP32 I2C SCL  |
 | Turbidity Sensor               | GPIO34    | ADC1_CH6, input only   |
-| Interlink Isolated Disable     | GPIO3     | Output, HIGH = disable |
-| Interlink Non-Isolated Disable | GPIO4     | Output, LOW = disable  |
+| Interlink Isolated Disable     | GPIO5     | Output, HIGH = disable |
+| Interlink Non-Isolated Disable | GPIO18    | Output, LOW = disable  |
+
+**Note**: ESP32 does not have GPIO pins 3 or 4. These pins were changed from the Arduino version to ensure compatibility.
 
 ## Power Consumption
 
