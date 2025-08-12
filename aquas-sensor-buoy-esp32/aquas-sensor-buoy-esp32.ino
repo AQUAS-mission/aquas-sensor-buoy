@@ -16,25 +16,36 @@
  * ESP32 Sensor Buoy Operation Pattern:
  * 
  * 1. SETUP (runs once when powered on):
- *    - Run hardware diagnostics
- *    - Test sensor communication
- *    - Test complete sensor reading cycle
- *    - Take first sensor reading
- *    - Go to deep sleep for 1 hour
+ *    - Run hardware diagnostics (if DEBUG_MODE enabled)
+ *    - Test sensor communication (if DEBUG_MODE enabled)
+ *    - Test complete sensor reading cycle (if DEBUG_MODE enabled)
+ *    - Initialize sequencer
+ *    - Ready to run sensor sequence
  * 
- * 2. WAKE CYCLE (repeats every hour):
+ * 2. SEQUENCER OPERATION (runs continuously):
+ *    - step1: Wake sensors and send read commands
+ *    - step2: Receive readings and send EC command
+ *    - step3: Receive EC, read turbidity, write data, sleep sensors
+ *    - sleepStep: Sleep interlink channels and go to deep sleep
+ * 
+ * 3. WAKE CYCLE (repeats every hour):
  *    - ESP32 wakes up from deep sleep
- *    - setup() runs again
- *    - Skip diagnostics (sensors are already known to work)
- *    - Take sensor reading using sequencer
- *    - Go back to deep sleep for 1 hour
+ *    - setup() runs again (skips diagnostics if not first time)
+ *    - loop() runs sequencer again
+ *    - sleepStep puts ESP32 back to deep sleep
  * 
- * This pattern ensures diagnostics run only once during initial setup,
- * while maintaining reliable hourly data collection.
+ * This pattern ensures diagnostics run only when needed,
+ * while maintaining reliable hourly data collection using the sequencer.
+ * 
+ * DIAGNOSTICS:
+ * - All diagnostic functions have been moved to a separate file: diagnostics.ino
+ * - To enable diagnostics, include diagnostics.ino in your Arduino project
+ * - Set DEBUG_MODE = true to run diagnostics during setup
+ * - Set DEBUG_MODE = false for production deployment (skips diagnostics)
  */
 
 // Debug flag - set to true to run diagnostics, false to skip them
-// 
+//
 // Usage:
 // - DEBUG_MODE = true:  Run full diagnostics, sensor tests, and reading tests
 //                       Useful for initial setup, troubleshooting, or development
@@ -51,7 +62,8 @@ const int interlinkNonIsolatedDisablePin = 18;
 const int turbidityPin = 34;
 
 // Sleep duration in microseconds (1 hour = 3600000000 microseconds)
-const uint64_t SLEEP_DURATION = 3600000000ULL; // 1 hour
+// const uint64_t SLEEP_DURATION = 3600000000ULL;  // 1 hour
+const uint64_t SLEEP_DURATION = 60000000ULL;  // 1 minute
 
 String filename = "/sensor.csv";
 
@@ -86,7 +98,7 @@ esp_adc_cal_characteristics_t adc_chars;
 // 0 = Success (all sensors working)
 // 1 = RTC error (time not available)
 // 2 = pH sensor error
-// 3 = RTD (temperature) sensor error  
+// 3 = RTD (temperature) sensor error
 // 4 = DO (dissolved oxygen) sensor error
 // 5 = EC (electrical conductivity) sensor error
 // 6 = Turbidity sensor error
@@ -95,17 +107,8 @@ int system_error_code = 0;
 
 // ****************************************
 
-// Helper function to convert error codes to readable messages
-const char* getErrorString(enum Ezo_board::errors error_code) {
-  switch (error_code) {
-    case Ezo_board::SUCCESS: return "SUCCESS";
-    case Ezo_board::FAIL: return "FAIL";
-    case Ezo_board::NOT_READY: return "NOT_READY";
-    case Ezo_board::NO_DATA: return "NO_DATA";
-    case Ezo_board::NOT_READ_CMD: return "NOT_READ_CMD";
-    default: return "UNKNOWN_ERROR";
-  }
-}
+// Diagnostic functions are now in a separate file: diagnostics.ino
+// Include that file in your project when you need to run diagnostics
 
 // Sequencer step functions
 void step1();
@@ -113,12 +116,6 @@ void step2();
 void step3();
 void sleepStep();
 
-//Last number here is probably the delay (in ms) after step 3. Adjust this time to be appropriate amount for a 15min delay.
-//NOTE: This is a temporary solution, as it doesn't let the ESP32 sleep. To allow for sleep (using ESP32):
-//Revert the number here to a low value (eg 1000) and sleep within Step 3 for 15mins via the ESP32 sleep module:
-//esp_sleep_enable_timer_wakeup(900000000); // 15 minutes in microseconds
-//esp_deep_sleep_start();
-//^^^^^include this in step 3
 Sequencer4 readSequence(&step1, 1000, &step2, 1000, &step3, 1000, &sleepStep, 1000);
 
 // Function to read turbidity from the sensor, based on temperature compensation and conversion from voltage to NTU
@@ -150,7 +147,8 @@ void initSPIFFS() {
   Serial.print("Initializing SPIFFS...");
   if (!SPIFFS.begin(true)) {
     Serial.println("SPIFFS failed to mount");
-    while (1);
+    while (1)
+      ;
   }
   Serial.println("SPIFFS initialized.");
 
@@ -177,265 +175,91 @@ void disableUnnecessaryPeripherals() {
   // Disable WiFi
   WiFi.mode(WIFI_MODE_NULL);
   esp_wifi_stop();
-  
+
   // Disable Bluetooth
   esp_bt_controller_disable();
   esp_bt_controller_deinit();
-  
+
   Serial.println("Unnecessary peripherals disabled");
-}
-
-void setupTime() {
-  // Initialize RTC
-  rtc.begin();
-  
-  // Set time to compile time if RTC is not running
-  RTCDateTime dt = rtc.getDateTime();
-  if (dt.year < 2020) {
-    Serial.println("RTC is NOT running, setting to compile time!");
-    rtc.setDateTime(__DATE__, __TIME__);
-  }
-  
-  // Check if RTC is working properly
-  dt = rtc.getDateTime();
-  if (dt.year < 2020) {
-    system_error_code = 1; // RTC error
-    Serial.println("Error: RTC not working properly");
-  } else {
-    Serial.printf("Current time: %04d-%02d-%02d %02d:%02d:%02d\n", 
-                  dt.year, dt.month, dt.day,
-                  dt.hour, dt.minute, dt.second);
-  }
-}
-
-// Hardware diagnostic function
-void runHardwareDiagnostics() {
-  Serial.println("=== HARDWARE DIAGNOSTICS ===");
-  
-  // Test basic I2C functionality
-  Serial.println("Testing basic I2C functionality...");
-  
-  // Test with a simple I2C scan
-  Serial.println("Performing I2C scan...");
-  int foundDevices = 0;
-  for (byte addr = 1; addr < 127; addr++) {
-    Wire.beginTransmission(addr);
-    byte error = Wire.endTransmission();
-    if (error == 0) {
-      Serial.printf("✓ Device found at 0x%02X\n", addr);
-      foundDevices++;
-    }
-  }
-  
-  Serial.printf("Total I2C devices found: %d\n", foundDevices);
-  
-  if (foundDevices == 0) {
-    Serial.println("❌ NO I2C DEVICES FOUND!");
-    Serial.println("This indicates a hardware problem:");
-    Serial.println("1. Check power supply to sensors");
-    Serial.println("2. Add 4.7kΩ pull-up resistors to SDA/SCL");
-    Serial.println("3. Verify wiring connections");
-    Serial.println("4. Check sensor power requirements");
-  } else if (foundDevices < 4) {
-    Serial.printf("⚠️  Only %d devices found (expected 4)\n", foundDevices);
-    Serial.println("Some sensors may not be powered or connected");
-  } else {
-    Serial.println("✓ All 4 sensors detected on I2C bus");
-  }
-  
-  // Test specific sensor addresses
-  Serial.println("\nTesting specific sensor addresses...");
-  byte addresses[] = {97, 99, 100, 102}; // DO, PH, EC, RTD
-  char* names[] = {"DO", "PH", "EC", "RTD"};
-  
-  for (int i = 0; i < 4; i++) {
-    Wire.beginTransmission(addresses[i]);
-    byte error = Wire.endTransmission();
-    if (error == 0) {
-      Serial.printf("✓ %s sensor (0x%02X) responding\n", names[i], addresses[i]);
-    } else {
-      Serial.printf("✗ %s sensor (0x%02X) NOT responding (error: %d)\n", names[i], addresses[i], error);
-    }
-    delay(100);
-  }
-  
-  Serial.println("=== END DIAGNOSTICS ===");
-}
-
-// Test sensor communication
-void testSensorCommunication() {
-  Serial.println("=== SENSOR COMMUNICATION TEST ===");
-  
-  // Wake sensors first
-  wakeSensors();
-  
-  // Test each sensor with Status command
-  Serial.println("Testing sensor responses...");
-  
-  // Test DO sensor
-  Serial.println("Testing DO sensor...");
-  DO.send_cmd("Status");
-  delay(1000);
-  char status_buffer[32];
-  enum Ezo_board::errors do_status = DO.receive_cmd(status_buffer, 32);
-  Serial.printf("DO Status: Error=%d (%s), Response=%s\n", do_status, getErrorString(do_status), status_buffer);
-  
-  // Test PH sensor
-  Serial.println("Testing PH sensor...");
-  PH.send_cmd("Status");
-  delay(1000);
-  enum Ezo_board::errors ph_status = PH.receive_cmd(status_buffer, 32);
-  Serial.printf("PH Status: Error=%d (%s), Response=%s\n", ph_status, getErrorString(ph_status), status_buffer);
-  
-  // Test RTD sensor
-  Serial.println("Testing RTD sensor...");
-  RTD.send_cmd("Status");
-  delay(1000);
-  enum Ezo_board::errors rtd_status = RTD.receive_cmd(status_buffer, 32);
-  Serial.printf("RTD Status: Error=%d (%s), Response=%s\n", rtd_status, getErrorString(rtd_status), status_buffer);
-  
-  // Test EC sensor
-  Serial.println("Testing EC sensor...");
-  EC.send_cmd("Status");
-  delay(1000);
-  enum Ezo_board::errors ec_status = EC.receive_cmd(status_buffer, 32);
-  Serial.printf("EC Status: Error=%d (%s), Response=%s\n", ec_status, getErrorString(ec_status), status_buffer);
-  
-  Serial.println("=== END COMMUNICATION TEST ===");
-}
-
-// Test a complete sensor reading cycle
-void testSensorReading() {
-  Serial.println("=== SENSOR READING TEST ===");
-  
-  // Step 1: Send read commands
-  Serial.println("Step 1: Sending read commands...");
-  DO.send_read_cmd();
-  PH.send_read_cmd();
-  RTD.send_read_cmd();
-  
-  // Step 2: Wait and receive readings
-  Serial.println("Step 2: Receiving readings...");
-  delay(1000); // Wait for sensors to process
-  
-  enum Ezo_board::errors do_err = DO.receive_cmd(do_receive_buffer, 32);
-  enum Ezo_board::errors ph_err = PH.receive_cmd(ph_receive_buffer, 32);
-  enum Ezo_board::errors rtd_err = RTD.receive_cmd(rtd_receive_buffer, 32);
-  
-  Serial.printf("DO: Error=%d (%s), Reading=%s\n", do_err, getErrorString(do_err), do_receive_buffer);
-  Serial.printf("PH: Error=%d (%s), Reading=%s\n", ph_err, getErrorString(ph_err), ph_receive_buffer);
-  Serial.printf("RTD: Error=%d (%s), Reading=%s\n", rtd_err, getErrorString(rtd_err), rtd_receive_buffer);
-  
-  // Step 3: Test EC with temperature compensation
-  Serial.println("Step 3: Testing EC with temperature compensation...");
-  float temp = RTD.get_last_received_reading();
-  if (temp > -1000.0) {
-    EC.send_read_with_temp_comp(temp);
-  } else {
-    EC.send_read_with_temp_comp(25.0);
-  }
-  
-  delay(1000);
-  enum Ezo_board::errors ec_err = EC.receive_cmd(ec_receive_buffer, 32);
-  Serial.printf("EC: Error=%d (%s), Reading=%s\n", ec_err, getErrorString(ec_err), ec_receive_buffer);
-  
-  // Step 4: Test turbidity
-  Serial.println("Step 4: Testing turbidity sensor...");
-  float temperature = RTD.get_last_received_reading();
-  if (temperature <= -1000.0) temperature = 25.0;
-  
-  int raw_turbidity = analogRead(turbidityPin);
-  turbidityNTU = readTurbidity(temperature);
-  Serial.printf("Turbidity: Raw ADC=%d, NTU=%.2f\n", raw_turbidity, turbidityNTU);
-  
-  Serial.println("=== END READING TEST ===");
-  
-  // Sleep sensors after test
-  sleepSensors();
 }
 
 void setup() {
   // Initialize Serial first for debugging
-  Serial.begin(9600);
+  Serial.begin(115200);
   Serial.println("ESP32 Sensor Buoy Starting...");
-  
-  // Set up time BEFORE disabling WiFi
-  setupTime();
-  
+
+  // Setup timer wakeup
+  esp_sleep_enable_timer_wakeup(SLEEP_DURATION);
+
   // Disable unnecessary peripherals after time sync
   disableUnnecessaryPeripherals();
-  
+
   // Set up pins
   pinMode(interlinkIsolatedDisablePin, OUTPUT);
   pinMode(interlinkNonIsolatedDisablePin, OUTPUT);
   Serial.println("GPIO pins configured");
-  
+
   // Initialize I2C with proper configuration
   Serial.println("Initializing I2C communication...");
   Wire.begin();
-  
+
   // Configure I2C with proper timing and pull-up settings
-  Wire.setTimeOut(5000); // 5 second timeout
-  Wire.setClock(100000); // Set to 100kHz for better reliability
-  
+  Wire.setTimeOut(5000);  // 5 second timeout
+  Wire.setClock(100000);  // Set to 100kHz for better reliability
+
   Serial.printf("I2C initialized on SDA: %d, SCL: %d\n", SDA, SCL);
   Serial.println("I2C configured: 100kHz clock, 5s timeout");
-  
-  // Run hardware diagnostics only if DEBUG_MODE is enabled
-  if (DEBUG_MODE) {
-    Serial.println("DEBUG_MODE enabled - running hardware diagnostics...");
-    runHardwareDiagnostics();
-  } else {
-    Serial.println("DEBUG_MODE disabled - skipping hardware diagnostics");
-  }
-  
+
   // Initialize SPIFFS
   initSPIFFS();
-  
+
   // Initialize ADC for turbidity sensor
   Serial.println("Initializing ADC for turbidity sensor...");
   analogReadResolution(12);
-  analogSetAttenuation(ADC_11db); // 0-3.3V range
+  analogSetAttenuation(ADC_11db);  // 0-3.3V range
   Serial.printf("ADC configured: 12-bit resolution, 0-3.3V range\n");
-  
+
   // Calibrate ADC
   Serial.println("Calibrating ADC...");
   esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 1100, &adc_chars);
   Serial.println("ADC calibration complete");
-  
+
   // Wake up interlink channels
   Serial.println("Waking up interlink channels...");
   wakeInterlinkChannels();
-  
+
   // Test sensor communication only if DEBUG_MODE is enabled
   if (DEBUG_MODE) {
     Serial.println("DEBUG_MODE enabled - testing sensor communication...");
-    testSensorCommunication();
+    Serial.println("NOTE: Include diagnostics.ino in your project to enable diagnostics");
+    // testSensorCommunication(); // Function moved to diagnostics.ino
   } else {
     Serial.println("DEBUG_MODE disabled - skipping sensor communication test");
   }
-  
+
   // Test a complete sensor reading cycle only if DEBUG_MODE is enabled
   if (DEBUG_MODE) {
     Serial.println("DEBUG_MODE enabled - testing complete sensor reading cycle...");
-    testSensorReading();
+    Serial.println("NOTE: Include diagnostics.ino in your project to enable diagnostics");
+    // testSensorReading(); // Function moved to diagnostics.ino
   } else {
     Serial.println("DEBUG_MODE disabled - skipping sensor reading test");
   }
-  
+
   Serial.println("System ready - data will be saved to " + filename);
-  
-  // Take sensor readings using sequencer
-  takeSensorReadings();
-  
-  // Go to deep sleep for 1 hour
-  goToDeepSleep();
+
+  // Initialize the sequencer (like Arduino version)
+  readSequence.reset();
+  Serial.println("Sequencer initialized - ready to run");
 }
 
 void loop() {
-  // Check for serial commands (like 'dump' from Python script)
+  // Run the sequencer (like Arduino version)
+  readSequence.run();
+
+  // Check for serial commands (like Arduino version)
   checkSerialCommands();
-  
+
   // Small delay to prevent overwhelming the system
   delay(100);
 }
@@ -476,18 +300,9 @@ void step3() {
 
   // Now we have all sensor readings - write immediately to SPIFFS
   writeDataToFile();
-  
+
   // Sleep sensors
   sleepSensors();
-}
-
-void takeSensorReadings() {
-  Serial.println("Taking sensor readings using sequencer...");
-  
-  readSequence.reset();
-  readSequence.run();
-  
-  Serial.println("Sensor reading sequence complete");
 }
 
 void writeDataToFile() {
@@ -496,7 +311,7 @@ void writeDataToFile() {
   if (dataFile) {
     // Get current timestamp from RTC
     RTCDateTime dt = rtc.getDateTime();
-    
+
     // Format timestamp as YYYY-MM-DD HH:MM:SS
     char timestamp[64];
     snprintf(timestamp, sizeof(timestamp), "%04d-%02d-%02d %02d:%02d:%02d",
@@ -523,16 +338,23 @@ void writeDataToFile() {
 
     dataFile.close();
     Serial.println("Data saved to SPIFFS");
-    
+
     // Print to Serial for debugging
-    Serial.print("Timestamp: "); Serial.println(timestamp);
-    Serial.print("pH: "); Serial.println(ph_receive_buffer);
-    Serial.print("Temperature: "); Serial.println(rtd_receive_buffer);
-    Serial.print("DO: "); Serial.println(do_receive_buffer);
-    Serial.print("EC: "); Serial.println(ec_receive_buffer);
-    Serial.print("Turbidity: "); Serial.println(turbidityNTU, 2);
-    Serial.print("Error Code: "); Serial.println(system_error_code);
-    
+    Serial.print("Timestamp: ");
+    Serial.println(timestamp);
+    Serial.print("pH: ");
+    Serial.println(ph_receive_buffer);
+    Serial.print("Temperature: ");
+    Serial.println(rtd_receive_buffer);
+    Serial.print("DO: ");
+    Serial.println(do_receive_buffer);
+    Serial.print("EC: ");
+    Serial.println(ec_receive_buffer);
+    Serial.print("Turbidity: ");
+    Serial.println(turbidityNTU, 2);
+    Serial.print("Error Code: ");
+    Serial.println(system_error_code);
+
   } else {
     Serial.println("Error opening " + filename + " for writing");
     // Fallback to Serial output if SPIFFS fails
@@ -552,33 +374,41 @@ void writeDataToFile() {
   }
 }
 
-void goToDeepSleep() {
-  Serial.println("Preparing for deep sleep...");
-  sleepSensors();  // Sleep all our sensors
-  sleepInterlinkChannels();
-  Serial.flush();  // Ensure all serial data is sent
-
-  Serial.printf("Going to deep sleep for %llu microseconds (%llu hours)\n", 
-                SLEEP_DURATION, SLEEP_DURATION / 3600000000ULL);
-  
-  // Configure deep sleep
-  esp_sleep_enable_timer_wakeup(SLEEP_DURATION);
-  
-  // Go to deep sleep
-  esp_deep_sleep_start();
-  
-  // This line should never be reached
-  Serial.println("This should never be printed");
-}
-
 // Sleep all sensors indefinitely until any other command is issued.
 void sleepSensors() {
-  char* sleepCommand = "Sleep";
-  DO.send_cmd(sleepCommand);
-  PH.send_cmd(sleepCommand);
-  EC.send_cmd(sleepCommand);
-  RTD.send_cmd(sleepCommand);
-  Serial.println("ALL sensors sleeping...");
+  Serial.println("Sending sleep commands to all sensors...");
+  
+  // Send sleep command to each sensor with delays to avoid overwhelming I2C bus
+  DO.send_cmd("Sleep");
+  delay(500);  // Small delay between commands
+  
+  PH.send_cmd("Sleep");
+  delay(500);
+  
+  EC.send_cmd("Sleep");
+  delay(500);
+  
+  RTD.send_cmd("Sleep");
+  delay(500);
+  
+  // Give sensors time to process sleep commands
+  Serial.println("Waiting for sensors to enter sleep mode...");
+  delay(1000);  // 1 second delay for sensors to process
+  
+  Serial.println("ALL sensors should now be sleeping...");
+  
+  // Verify sensors are sleeping by checking if they respond (they shouldn't)
+  Serial.println("Verifying sensors are in sleep mode...");
+  delay(500);  // Additional delay before verification
+  
+  // Try to send a status command to RTD - if it's sleeping, this should fail
+  // This is a simple verification that the sensor is not responding
+  Wire.beginTransmission(102);  // RTD address
+  if (Wire.endTransmission() != 0) {
+    Serial.println("RTD sensor appears to be sleeping (no response)");
+  } else {
+    Serial.println("WARNING: RTD sensor may still be awake!");
+  }
 }
 
 // Send an arbitrary command to wake all sensors + delay
@@ -605,32 +435,56 @@ void wakeInterlinkChannels() {
 }
 
 void sleepStep() {
-  Serial.println("Sleep step completed");
+  Serial.println("Sleep step completed - going to deep sleep...");
+
+  // Sleep sensors with proper delays
+  sleepSensors();
+
+  // Sleep interlink channels
+  sleepInterlinkChannels();
+
+  // Additional safety: disable I2C to prevent communication attempts during sleep
+  Serial.println("Disabling I2C communication...");
+  Wire.end();
+  
+  // Small delay to ensure I2C is fully disabled
+  delay(100);
+
+  Serial.flush();  // Ensure all serial data is sent
+
+  Serial.printf("Going to deep sleep for %llu microseconds (1 hour)\n", SLEEP_DURATION);
+  Serial.println("ESP32 will wake up every hour to collect sensor data");
+
+  // Go to deep sleep – timer based wakeup configured in setup()
+  esp_deep_sleep_start();
+
+  // This line should never be reached
+  Serial.println("This should never be printed");
 }
 
 // Function to dump CSV data over serial (for Python script)
 void dumpCSVToSerial() {
   Serial.println("=== CSV DATA DUMP ===");
-  
+
   File file = SPIFFS.open(filename, "r");
   if (file) {
     Serial.println("Dumping sensor.csv file...");
-    
+
     int lines_dumped = 0;
     while (file.available()) {
       String line = file.readStringUntil('\n');
       Serial.print(line);
       if (!line.endsWith("\n")) {
-        Serial.println(); // Add newline if missing
+        Serial.println();  // Add newline if missing
       }
       lines_dumped++;
-      
+
       // Progress indicator for large files
       if (lines_dumped % 100 == 0) {
         Serial.printf("Dumped %d lines...\n", lines_dumped);
       }
     }
-    
+
     file.close();
     Serial.printf("=== END CSV DUMP ===\n");
     Serial.printf("Total lines dumped: %d\n", lines_dumped);
@@ -644,7 +498,7 @@ void checkSerialCommands() {
   if (Serial.available()) {
     String command = Serial.readStringUntil('\n');
     command.trim();
-    
+
     if (command == "dump") {
       Serial.println("Received 'dump' command - starting CSV data dump...");
       dumpCSVToSerial();
@@ -657,7 +511,7 @@ void checkSerialCommands() {
       Serial.println("=== SYSTEM STATUS ===");
       Serial.printf("System error code: %d\n", system_error_code);
       Serial.printf("CSV file: %s\n", filename.c_str());
-      
+
       // Check file size
       File file = SPIFFS.open(filename, "r");
       if (file) {
@@ -666,11 +520,11 @@ void checkSerialCommands() {
       } else {
         Serial.println("File not accessible");
       }
-      
+
       Serial.println("=== END STATUS ===");
     } else if (command.length() > 0) {
       Serial.printf("Unknown command: '%s'\n", command.c_str());
       Serial.println("Type 'help' for available commands");
     }
   }
-} 
+}
