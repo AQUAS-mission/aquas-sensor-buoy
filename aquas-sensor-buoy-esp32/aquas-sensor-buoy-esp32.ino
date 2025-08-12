@@ -12,6 +12,36 @@
 #include <sequencer3.h>
 #include <sequencer4.h>
 
+/*
+ * ESP32 Sensor Buoy Operation Pattern:
+ * 
+ * 1. SETUP (runs once when powered on):
+ *    - Run hardware diagnostics
+ *    - Test sensor communication
+ *    - Test complete sensor reading cycle
+ *    - Take first sensor reading
+ *    - Go to deep sleep for 1 hour
+ * 
+ * 2. WAKE CYCLE (repeats every hour):
+ *    - ESP32 wakes up from deep sleep
+ *    - setup() runs again
+ *    - Skip diagnostics (sensors are already known to work)
+ *    - Take sensor reading using sequencer
+ *    - Go back to deep sleep for 1 hour
+ * 
+ * This pattern ensures diagnostics run only once during initial setup,
+ * while maintaining reliable hourly data collection.
+ */
+
+// Debug flag - set to true to run diagnostics, false to skip them
+// 
+// Usage:
+// - DEBUG_MODE = true:  Run full diagnostics, sensor tests, and reading tests
+//                       Useful for initial setup, troubleshooting, or development
+// - DEBUG_MODE = false: Skip diagnostics, go straight to sensor readings
+//                       Use for production deployment to save time and power
+const bool DEBUG_MODE = false;
+
 // Interlink isolated channel disable pin. HIGH = disable
 const int interlinkIsolatedDisablePin = 5;
 // Interlink non-isolated channel disable pin. LOW = disable
@@ -351,8 +381,13 @@ void setup() {
   Serial.printf("I2C initialized on SDA: %d, SCL: %d\n", SDA, SCL);
   Serial.println("I2C configured: 100kHz clock, 5s timeout");
   
-  // Run hardware diagnostics
-  runHardwareDiagnostics();
+  // Run hardware diagnostics only if DEBUG_MODE is enabled
+  if (DEBUG_MODE) {
+    Serial.println("DEBUG_MODE enabled - running hardware diagnostics...");
+    runHardwareDiagnostics();
+  } else {
+    Serial.println("DEBUG_MODE disabled - skipping hardware diagnostics");
+  }
   
   // Initialize SPIFFS
   initSPIFFS();
@@ -372,24 +407,37 @@ void setup() {
   Serial.println("Waking up interlink channels...");
   wakeInterlinkChannels();
   
-  // Test sensor communication
-  testSensorCommunication();
+  // Test sensor communication only if DEBUG_MODE is enabled
+  if (DEBUG_MODE) {
+    Serial.println("DEBUG_MODE enabled - testing sensor communication...");
+    testSensorCommunication();
+  } else {
+    Serial.println("DEBUG_MODE disabled - skipping sensor communication test");
+  }
   
-  // Test a complete sensor reading cycle
-  testSensorReading();
+  // Test a complete sensor reading cycle only if DEBUG_MODE is enabled
+  if (DEBUG_MODE) {
+    Serial.println("DEBUG_MODE enabled - testing complete sensor reading cycle...");
+    testSensorReading();
+  } else {
+    Serial.println("DEBUG_MODE disabled - skipping sensor reading test");
+  }
   
   Serial.println("System ready - data will be saved to " + filename);
   
   // Take sensor readings using sequencer
   takeSensorReadings();
   
-  // Go to deep sleep
+  // Go to deep sleep for 1 hour
   goToDeepSleep();
 }
 
 void loop() {
-  // This should never be reached in normal operation
-  // The ESP32 will restart after deep sleep and run setup() again
+  // Check for serial commands (like 'dump' from Python script)
+  checkSerialCommands();
+  
+  // Small delay to prevent overwhelming the system
+  delay(100);
 }
 
 // Steps of sensor readings and sleeping
@@ -558,4 +606,71 @@ void wakeInterlinkChannels() {
 
 void sleepStep() {
   Serial.println("Sleep step completed");
+}
+
+// Function to dump CSV data over serial (for Python script)
+void dumpCSVToSerial() {
+  Serial.println("=== CSV DATA DUMP ===");
+  
+  File file = SPIFFS.open(filename, "r");
+  if (file) {
+    Serial.println("Dumping sensor.csv file...");
+    
+    int lines_dumped = 0;
+    while (file.available()) {
+      String line = file.readStringUntil('\n');
+      Serial.print(line);
+      if (!line.endsWith("\n")) {
+        Serial.println(); // Add newline if missing
+      }
+      lines_dumped++;
+      
+      // Progress indicator for large files
+      if (lines_dumped % 100 == 0) {
+        Serial.printf("Dumped %d lines...\n", lines_dumped);
+      }
+    }
+    
+    file.close();
+    Serial.printf("=== END CSV DUMP ===\n");
+    Serial.printf("Total lines dumped: %d\n", lines_dumped);
+  } else {
+    Serial.println("Error: Could not open CSV file for dumping");
+  }
+}
+
+// Function to check for serial commands
+void checkSerialCommands() {
+  if (Serial.available()) {
+    String command = Serial.readStringUntil('\n');
+    command.trim();
+    
+    if (command == "dump") {
+      Serial.println("Received 'dump' command - starting CSV data dump...");
+      dumpCSVToSerial();
+    } else if (command == "help") {
+      Serial.println("Available commands:");
+      Serial.println("  dump - Download CSV data");
+      Serial.println("  help - Show this help");
+      Serial.println("  status - Show system status");
+    } else if (command == "status") {
+      Serial.println("=== SYSTEM STATUS ===");
+      Serial.printf("System error code: %d\n", system_error_code);
+      Serial.printf("CSV file: %s\n", filename.c_str());
+      
+      // Check file size
+      File file = SPIFFS.open(filename, "r");
+      if (file) {
+        Serial.printf("File size: %d bytes\n", file.size());
+        file.close();
+      } else {
+        Serial.println("File not accessible");
+      }
+      
+      Serial.println("=== END STATUS ===");
+    } else if (command.length() > 0) {
+      Serial.printf("Unknown command: '%s'\n", command.c_str());
+      Serial.println("Type 'help' for available commands");
+    }
+  }
 } 
