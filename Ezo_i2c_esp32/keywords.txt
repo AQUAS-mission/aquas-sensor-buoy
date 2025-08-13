@@ -1,0 +1,26 @@
+# Syntax Coloring Map For Ezo_i2c_esp32
+
+# Datatypes (KEYWORD1)
+Ezo_board	KEYWORD1
+
+# Methods and Functions (KEYWORD2)
+send_cmd	KEYWORD2
+send_read_cmd	KEYWORD2
+send_cmd_with_num	KEYWORD2
+send_read_with_temp_comp	KEYWORD2
+receive_cmd	KEYWORD2
+receive_read_cmd	KEYWORD2
+is_read_poll	KEYWORD2
+get_last_received_reading	KEYWORD2
+get_error	KEYWORD2
+get_name	KEYWORD2
+set_name	KEYWORD2
+get_address	KEYWORD2
+set_address	KEYWORD2
+
+# Constants (LITERAL1)
+SUCCESS	LITERAL1
+FAIL	LITERAL1
+NOT_READY	LITERAL1
+NO_DATA	LITERAL1
+NOT_READ_CMD	LITERAL1 
