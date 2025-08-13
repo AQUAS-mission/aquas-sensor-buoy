@@ -12,6 +12,7 @@
 #include <WiFi.h>
 #include <sequencer3.h>
 #include <sequencer4.h>
+#include <driver/rtc_io.h>  // Add RTC GPIO support
 
 /*
  * ESP32 Sensor Buoy Operation Pattern:
@@ -44,9 +45,10 @@ const int sdCardPowerPin = 4;
 const int sdCardCSPin = 5;
 
 // Interlink isolated channel disable pin. HIGH = disable
-const int interlinkIsolatedDisablePin = 25;  // Changed to avoid conflict with I2C SDA
+// Note: Pins 25,26 are RTC GPIO pins that can maintain state during deep sleep
+const int interlinkIsolatedDisablePin = 25;  // RTC_GPIO6 - maintains state during sleep
 // Interlink non-isolated channel disable pin. LOW = disable
-const int interlinkNonIsolatedDisablePin = 26;  // Changed to avoid conflict with I2C SCL
+const int interlinkNonIsolatedDisablePin = 26;  // RTC_GPIO7 - maintains state during sleep
 
 // Turbidity sensor pin (ADC1_CH6 on GPIO34)
 const int turbidityPin = 34;
@@ -201,10 +203,13 @@ void setup() {
   disableUnnecessaryPeripherals();
 
   // Set up pins
-  pinMode(interlinkIsolatedDisablePin, OUTPUT);
-  pinMode(interlinkNonIsolatedDisablePin, OUTPUT);
   pinMode(sdCardPowerPin, OUTPUT);
-  Serial.println("GPIO pins configured");
+  
+  // Initialize interlink control pins as RTC GPIO for persistent state during sleep
+  rtc_gpio_init((gpio_num_t)interlinkIsolatedDisablePin);
+  rtc_gpio_init((gpio_num_t)interlinkNonIsolatedDisablePin);
+  
+  Serial.printf("Interlink pins configured as RTC GPIO: %d, %d\n", interlinkIsolatedDisablePin, interlinkNonIsolatedDisablePin);
 
   // Initialize I2C with proper configuration
   Serial.println("Initializing I2C communication...");
@@ -231,6 +236,9 @@ void setup() {
   esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 1100, &adc_chars);
   Serial.println("ADC calibration complete");
 
+  // Disable force hold from previous sleep cycle
+  rtc_gpio_force_hold_dis_all();
+  
   // Wake up interlink channels
   Serial.println("Waking up interlink channels...");
   wakeInterlinkChannels();
@@ -412,15 +420,33 @@ void wakeSensors() {
 }
 
 void sleepInterlinkChannels() {
-  digitalWrite(interlinkNonIsolatedDisablePin, LOW);
-  digitalWrite(interlinkIsolatedDisablePin, HIGH);
-  Serial.println("Sleeping interlink channels...");
+  // Use RTC GPIO to set values that persist during deep sleep
+  rtc_gpio_set_direction((gpio_num_t)interlinkNonIsolatedDisablePin, RTC_GPIO_MODE_OUTPUT_ONLY);
+  rtc_gpio_set_direction((gpio_num_t)interlinkIsolatedDisablePin, RTC_GPIO_MODE_OUTPUT_ONLY);
+  
+  rtc_gpio_set_level((gpio_num_t)interlinkNonIsolatedDisablePin, 0);  // LOW = disable
+  rtc_gpio_set_level((gpio_num_t)interlinkIsolatedDisablePin, 1);     // HIGH = disable
+  
+  // Enable hold to latch these values before sleep
+  rtc_gpio_hold_en((gpio_num_t)interlinkNonIsolatedDisablePin);
+  rtc_gpio_hold_en((gpio_num_t)interlinkIsolatedDisablePin);
+  
+  Serial.println("Sleeping interlink channels using RTC GPIO...");
 }
 
 void wakeInterlinkChannels() {
-  digitalWrite(interlinkNonIsolatedDisablePin, HIGH);
-  digitalWrite(interlinkIsolatedDisablePin, LOW);
-  Serial.println("Waking interlink channels...");
+  // Disable hold first
+  rtc_gpio_hold_dis((gpio_num_t)interlinkNonIsolatedDisablePin);
+  rtc_gpio_hold_dis((gpio_num_t)interlinkIsolatedDisablePin);
+  
+  // Use RTC GPIO to set values
+  rtc_gpio_set_direction((gpio_num_t)interlinkNonIsolatedDisablePin, RTC_GPIO_MODE_OUTPUT_ONLY);
+  rtc_gpio_set_direction((gpio_num_t)interlinkIsolatedDisablePin, RTC_GPIO_MODE_OUTPUT_ONLY);
+  
+  rtc_gpio_set_level((gpio_num_t)interlinkNonIsolatedDisablePin, 1);  // HIGH = enable
+  rtc_gpio_set_level((gpio_num_t)interlinkIsolatedDisablePin, 0);     // LOW = enable
+  
+  Serial.println("Waking interlink channels using RTC GPIO...");
 }
 
 void sleepStep() {
@@ -429,7 +455,7 @@ void sleepStep() {
   // Sleep sensors with proper delays
   sleepSensors();
 
-  // Sleep interlink channels
+  // Sleep interlink channels using RTC GPIO (values will persist during sleep)
   sleepInterlinkChannels();
 
   // Power off SD card to save power during sleep
@@ -442,6 +468,10 @@ void sleepStep() {
   
   // Small delay to ensure I2C is fully disabled
   delay(100);
+
+  // Force hold all RTC GPIO pins to ensure their values persist during deep sleep
+  Serial.println("Enabling RTC GPIO hold for deep sleep...");
+  rtc_gpio_force_hold_en_all();
 
   Serial.flush();  // Ensure all serial data is sent
 
